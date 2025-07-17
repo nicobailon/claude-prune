@@ -1,0 +1,49 @@
+{
+  "name": "claude-prune",
+  "version": "1.0.0",
+  "description": "Prune early messages from Claude Code session transcripts",
+  "author": "Danny Aziz",
+  "license": "MIT",
+  "keywords": ["claude", "claude-code", "session", "prune", "jsonl", "cli"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dannyaziz/cc-prune.git"
+  },
+  "homepage": "https://github.com/dannyaziz/cc-prune#readme",
+  "bugs": {
+    "url": "https://github.com/dannyaziz/cc-prune/issues"
+  },
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "claude-prune": "./dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node --format esm",
+    "prepublishOnly": "bun run build",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^24.0.14",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.11.0",
+    "chalk": "^5.4.1",
+    "commander": "^14.0.0",
+    "fs-extra": "^11.3.0",
+    "ora": "^8.2.0"
+  }
+}

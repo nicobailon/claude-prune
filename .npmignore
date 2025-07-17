@@ -1,0 +1,9 @@
+src/
+*.test.ts
+*.test.js
+vitest.config.ts
+.git/
+.github/
+node_modules/
+*.log
+.DS_Store
