@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pruneSessionLines } from './index.js';
+import { pruneSessionLines, findLatestBackup } from './index.js';
 
 describe('pruneSessionLines', () => {
   const createMessage = (type: string, uuid: string, content: string = "test") => 
@@ -147,5 +147,97 @@ describe('pruneSessionLines', () => {
     expect(result.kept).toBe(0);
     expect(result.dropped).toBe(2);
     expect(result.assistantCount).toBe(1);
+  });
+});
+
+describe('findLatestBackup', () => {
+  it('should find the latest backup by timestamp', () => {
+    const backupFiles = [
+      'abc123.jsonl.1640995200000', // older
+      'abc123.jsonl.1641081600000', // newest
+      'abc123.jsonl.1640908800000', // oldest
+      'def456.jsonl.1641000000000', // different session
+    ];
+
+    const result = findLatestBackup(backupFiles, 'abc123');
+
+    expect(result).toEqual({
+      name: 'abc123.jsonl.1641081600000',
+      timestamp: 1641081600000
+    });
+  });
+
+  it('should return null when no backups found for session', () => {
+    const backupFiles = [
+      'def456.jsonl.1640995200000',
+      'xyz789.jsonl.1641081600000',
+    ];
+
+    const result = findLatestBackup(backupFiles, 'abc123');
+
+    expect(result).toBeNull();
+  });
+
+  it('should handle empty backup files array', () => {
+    const result = findLatestBackup([], 'abc123');
+
+    expect(result).toBeNull();
+  });
+
+  it('should handle single backup file', () => {
+    const backupFiles = ['abc123.jsonl.1640995200000'];
+
+    const result = findLatestBackup(backupFiles, 'abc123');
+
+    expect(result).toEqual({
+      name: 'abc123.jsonl.1640995200000',
+      timestamp: 1640995200000
+    });
+  });
+
+  it('should filter out files that do not match session pattern', () => {
+    const backupFiles = [
+      'abc123.jsonl.1640995200000',
+      'abc123.txt.1641081600000', // wrong extension
+      'abc123.jsonl', // missing timestamp
+      'abc123-other.jsonl.1641000000000', // different naming
+    ];
+
+    const result = findLatestBackup(backupFiles, 'abc123');
+
+    expect(result).toEqual({
+      name: 'abc123.jsonl.1640995200000',
+      timestamp: 1640995200000
+    });
+  });
+
+  it('should handle malformed timestamps gracefully', () => {
+    const backupFiles = [
+      'abc123.jsonl.invalid',
+      'abc123.jsonl.1640995200000',
+      'abc123.jsonl.abc',
+    ];
+
+    const result = findLatestBackup(backupFiles, 'abc123');
+
+    expect(result).toEqual({
+      name: 'abc123.jsonl.1640995200000',
+      timestamp: 1640995200000
+    });
+  });
+
+  it('should sort by timestamp correctly with multiple valid backups', () => {
+    const backupFiles = [
+      'abc123.jsonl.1000', // smallest
+      'abc123.jsonl.3000', // largest
+      'abc123.jsonl.2000', // middle
+    ];
+
+    const result = findLatestBackup(backupFiles, 'abc123');
+
+    expect(result).toEqual({
+      name: 'abc123.jsonl.3000',
+      timestamp: 3000
+    });
   });
 });
