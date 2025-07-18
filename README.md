@@ -7,6 +7,8 @@ A fast CLI tool for pruning Claude Code sessions.
 - 🎯 **Smart Pruning**: Keep messages since the last N assistant responses
 - 🛡️ **Safe by Default**: Always preserves session summaries and metadata
 - 💾 **Auto Backup**: Creates timestamped backups before modifying files
+- 📝 **Optional Summarization**: Generate AI summaries of pruned content with `--summarize-pruned`
+- 🔄 **Restore Support**: Easily restore from backups with the `restore` command
 
 ## Installation
 
@@ -33,7 +35,11 @@ bun install -g claude-prune
 ## Usage
 
 ```bash
-claude-prune <sessionId> --keep <number> [--dry-run]
+claude-prune prune <sessionId> --keep <number> [--dry-run] [--summarize-pruned]
+claude-prune restore <sessionId> [--dry-run]
+
+# Backward compatibility
+claude-prune <sessionId> --keep <number> [--dry-run] [--summarize-pruned]
 ```
 
 ### Arguments
@@ -44,6 +50,7 @@ claude-prune <sessionId> --keep <number> [--dry-run]
 
 - `-k, --keep <number>`: Number of assistant messages to keep (required)
 - `--dry-run`: Preview changes without modifying files
+- `--summarize-pruned`: Generate a summary of pruned messages and prepend it to the session (requires Claude CLI)
 - `-h, --help`: Show help information
 - `-V, --version`: Show version number
 
@@ -58,6 +65,15 @@ claude-prune abc123-def456-789 --keep 5 --dry-run
 
 # Minimal pruning - keep only the last assistant message
 claude-prune abc123-def456-789 --keep 1
+
+# Keep the last 10 assistant messages and add a summary of the pruned messages
+claude-prune prune abc123-def456-789 --keep 10 --summarize-pruned
+
+# Preview what would be pruned with summarization (dry run)
+claude-prune prune abc123-def456-789 --keep 10 --summarize-pruned --dry-run
+
+# Backward compatibility: old syntax still works
+claude-prune abc123-def456-789 --keep 10 --summarize-pruned
 ```
 
 ## How It Works
