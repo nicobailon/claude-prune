@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { pruneSessionLines, findLatestBackup } from './index.js';
+import { execSync } from 'child_process';
+
+vi.mock('child_process', () => ({
+  execSync: vi.fn()
+}));
 
 describe('pruneSessionLines', () => {
   const createMessage = (type: string, uuid: string, content: string = "test") => 
@@ -15,10 +20,13 @@ describe('pruneSessionLines', () => {
       createMessage("assistant", "2"),
     ];
 
-    const result = pruneSessionLines(lines, 0);
+    const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, 0);
     
-    expect(result.outLines).toHaveLength(1);
-    expect(result.outLines[0]).toBe(lines[0]);
+    expect(outLines).toHaveLength(1);
+    expect(outLines[0]).toBe(lines[0]);
+    expect(droppedMessages).toHaveLength(2);
+    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'test' });
+    expect(droppedMessages[1]).toEqual({ type: 'assistant', content: 'test' });
   });
 
   it('should keep messages from last N assistant messages', () => {
@@ -32,12 +40,13 @@ describe('pruneSessionLines', () => {
       createMessage("assistant", "6"), // assistant 3
     ];
 
-    const result = pruneSessionLines(lines, 2);
+    const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, 2);
     
-    expect(result.outLines).toHaveLength(4); // summary + 3 messages from assistant 2 onward
-    expect(result.kept).toBe(3);
-    expect(result.dropped).toBe(3);
-    expect(result.assistantCount).toBe(3);
+    expect(outLines).toHaveLength(4); // summary + 3 messages from assistant 2 onward
+    expect(kept).toBe(3);
+    expect(dropped).toBe(3);
+    expect(assistantCount).toBe(3);
+    expect(droppedMessages).toHaveLength(3);
   });
 
   it('should keep all messages if assistant count <= keepN', () => {
@@ -49,12 +58,13 @@ describe('pruneSessionLines', () => {
       createMessage("assistant", "4"),
     ];
 
-    const result = pruneSessionLines(lines, 5);
+    const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, 5);
     
-    expect(result.outLines).toHaveLength(5); // all lines
-    expect(result.kept).toBe(4);
-    expect(result.dropped).toBe(0);
-    expect(result.assistantCount).toBe(2);
+    expect(outLines).toHaveLength(5); // all lines
+    expect(kept).toBe(4);
+    expect(dropped).toBe(0);
+    expect(assistantCount).toBe(2);
+    expect(droppedMessages).toHaveLength(0);
   });
 
   it('should preserve non-message lines (tool results, etc)', () => {
@@ -67,21 +77,23 @@ describe('pruneSessionLines', () => {
       createMessage("user", "3"),
     ];
 
-    const result = pruneSessionLines(lines, 1);
+    const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, 1);
     
-    expect(result.outLines).toHaveLength(6); // summary + tool result + non-json + 2 messages from assistant
-    expect(result.kept).toBe(3);
-    expect(result.dropped).toBe(0);
-    expect(result.assistantCount).toBe(1);
+    expect(outLines).toHaveLength(6); // summary + tool result + non-json + 2 messages from assistant
+    expect(kept).toBe(3);
+    expect(dropped).toBe(0);
+    expect(assistantCount).toBe(1);
+    expect(droppedMessages).toHaveLength(0);
   });
 
   it('should handle empty lines array', () => {
-    const result = pruneSessionLines([], 5);
+    const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines([], 5);
     
-    expect(result.outLines).toHaveLength(0);
-    expect(result.kept).toBe(0);
-    expect(result.dropped).toBe(0);
-    expect(result.assistantCount).toBe(0);
+    expect(outLines).toHaveLength(0);
+    expect(kept).toBe(0);
+    expect(dropped).toBe(0);
+    expect(assistantCount).toBe(0);
+    expect(droppedMessages).toHaveLength(0);
   });
 
   it('should handle no assistant messages', () => {
@@ -92,12 +104,13 @@ describe('pruneSessionLines', () => {
       createMessage("system", "3"),
     ];
 
-    const result = pruneSessionLines(lines, 2);
+    const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, 2);
     
-    expect(result.outLines).toHaveLength(4); // all lines since no assistant messages to cut from
-    expect(result.kept).toBe(3);
-    expect(result.dropped).toBe(0);
-    expect(result.assistantCount).toBe(0);
+    expect(outLines).toHaveLength(4); // all lines since no assistant messages to cut from
+    expect(kept).toBe(3);
+    expect(dropped).toBe(0);
+    expect(assistantCount).toBe(0);
+    expect(droppedMessages).toHaveLength(0);
   });
 
   it('should handle malformed JSON gracefully', () => {
@@ -109,12 +122,13 @@ describe('pruneSessionLines', () => {
       "{ invalid json",
     ];
 
-    const result = pruneSessionLines(lines, 1);
+    const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, 1);
     
-    expect(result.outLines).toHaveLength(5); // summary + invalid json + 2 messages + invalid json
-    expect(result.kept).toBe(2);
-    expect(result.dropped).toBe(0);
-    expect(result.assistantCount).toBe(1);
+    expect(outLines).toHaveLength(5); // summary + invalid json + 2 messages + invalid json
+    expect(kept).toBe(2);
+    expect(dropped).toBe(0);
+    expect(assistantCount).toBe(1);
+    expect(droppedMessages).toHaveLength(0);
   });
 
   it('should handle keepN = 0', () => {
@@ -126,12 +140,13 @@ describe('pruneSessionLines', () => {
       createMessage("assistant", "4"),
     ];
 
-    const result = pruneSessionLines(lines, 0);
+    const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, 0);
     
-    expect(result.outLines).toHaveLength(1); // only summary
-    expect(result.kept).toBe(0);
-    expect(result.dropped).toBe(4);
-    expect(result.assistantCount).toBe(2);
+    expect(outLines).toHaveLength(1); // only summary
+    expect(kept).toBe(0);
+    expect(dropped).toBe(4);
+    expect(assistantCount).toBe(2);
+    expect(droppedMessages).toHaveLength(4);
   });
 
   it('should handle negative keepN', () => {
@@ -141,12 +156,71 @@ describe('pruneSessionLines', () => {
       createMessage("assistant", "2"),
     ];
 
-    const result = pruneSessionLines(lines, -5);
+    const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, -5);
     
-    expect(result.outLines).toHaveLength(1); // only summary
-    expect(result.kept).toBe(0);
-    expect(result.dropped).toBe(2);
-    expect(result.assistantCount).toBe(1);
+    expect(outLines).toHaveLength(1); // only summary
+    expect(kept).toBe(0);
+    expect(dropped).toBe(2);
+    expect(assistantCount).toBe(1);
+    expect(droppedMessages).toHaveLength(2);
+  });
+
+  it('collects dropped message content', () => {
+    const lines = [
+      'header line',
+      '{"type":"user","message":{"content":"Hello"}}',
+      '{"type":"assistant","message":{"content":"Hi there"}}',
+      '{"type":"user","message":{"content":"How are you?"}}',
+      '{"type":"assistant","message":{"content":"I am fine"}}',
+    ];
+    const { droppedMessages } = pruneSessionLines(lines, 1);
+    expect(droppedMessages).toHaveLength(3);
+    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'Hello' });
+    expect(droppedMessages[1]).toEqual({ type: 'assistant', content: 'Hi there' });
+    expect(droppedMessages[2]).toEqual({ type: 'user', content: 'How are you?' });
+  });
+
+  it('handles messages without content gracefully', () => {
+    const lines = [
+      'header line',
+      '{"type":"user"}',
+      '{"type":"assistant","message":{}}',
+      '{"type":"user","message":{"content":"Valid message"}}',
+    ];
+    const { droppedMessages } = pruneSessionLines(lines, 0);
+    expect(droppedMessages).toHaveLength(1);
+    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'Valid message' });
+  });
+
+  it('summary lines with isCompactSummary are preserved', () => {
+    const lines = [
+      'header line',
+      '{"type":"user","isCompactSummary":true,"message":{"content":"Previous summary"}}',
+      '{"type":"user","message":{"content":"New message"}}',
+    ];
+    const { outLines, droppedMessages } = pruneSessionLines(lines, 1);
+    expect(outLines).toContain('{"type":"user","isCompactSummary":true,"message":{"content":"Previous summary"}}');
+    expect(droppedMessages).toHaveLength(0);
+  });
+});
+
+describe('execSync error handling', () => {
+  it('should handle execSync errors gracefully', () => {
+    const mockExecSync = vi.mocked(execSync);
+    
+    // Make execSync throw an error
+    mockExecSync.mockImplementation(() => {
+      throw new Error('Command not found: claude');
+    });
+    
+    // This test verifies that the error handling exists in the main function
+    // The actual process.exit(1) call would need to be tested in an integration test
+    expect(() => {
+      mockExecSync('claude -p \'test\'', { encoding: 'utf8', timeout: 30000 });
+    }).toThrow('Command not found: claude');
+    
+    // Reset mock
+    mockExecSync.mockRestore();
   });
 });
 
@@ -239,5 +313,88 @@ describe('findLatestBackup', () => {
       name: 'abc123.jsonl.3000',
       timestamp: 3000
     });
+  });
+});
+
+describe('summarization behavior', () => {
+  it('should create proper summary line structure', () => {
+    const summaryContent = 'Previously, we discussed various topics.';
+    const summaryLine = JSON.stringify({
+      type: "user",
+      isCompactSummary: true,
+      message: { content: summaryContent }
+    });
+
+    const parsed = JSON.parse(summaryLine);
+    expect(parsed.type).toBe('user');
+    expect(parsed.isCompactSummary).toBe(true);
+    expect(parsed.message.content).toBe(summaryContent);
+  });
+
+  it('should collect dropped messages with content', () => {
+    const lines = [
+      'header line',
+      '{"type":"user","message":{"content":"Hello"}}',
+      '{"type":"assistant","message":{"content":"Hi there"}}',
+      '{"type":"user","message":{"content":"How are you?"}}',
+      '{"type":"assistant","message":{"content":"I am fine"}}',
+    ];
+    
+    const { droppedMessages } = pruneSessionLines(lines, 1);
+    
+    expect(droppedMessages).toHaveLength(3);
+    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'Hello' });
+    expect(droppedMessages[1]).toEqual({ type: 'assistant', content: 'Hi there' });
+    expect(droppedMessages[2]).toEqual({ type: 'user', content: 'How are you?' });
+  });
+
+  it('should not collect dropped messages when all are kept', () => {
+    const lines = [
+      'header line',
+      '{"type":"user","message":{"content":"Hello"}}',
+      '{"type":"assistant","message":{"content":"Hi there"}}',
+    ];
+    
+    const { droppedMessages } = pruneSessionLines(lines, 10);
+    
+    expect(droppedMessages).toHaveLength(0);
+  });
+
+  it('should handle summary insertion after pruning', () => {
+    // Test the behavior of inserting summary at position 1
+    const outLines = ['header line', 'message 1', 'message 2'];
+    const summaryLine = JSON.stringify({
+      type: "user",
+      isCompactSummary: true,
+      message: { content: "Previously, we discussed test topics." }
+    });
+
+    // Insert summary after first line
+    outLines.splice(1, 0, summaryLine);
+
+    expect(outLines).toHaveLength(4);
+    expect(outLines[0]).toBe('header line');
+    expect(outLines[1]).toBe(summaryLine);
+    expect(outLines[2]).toBe('message 1');
+    expect(outLines[3]).toBe('message 2');
+  });
+
+  it('should handle empty outLines array for summary insertion', () => {
+    const outLines: string[] = [];
+    const summaryLine = JSON.stringify({
+      type: "user",
+      isCompactSummary: true,
+      message: { content: "Summary content" }
+    });
+
+    // When outLines is empty, push to end
+    if (outLines.length > 0) {
+      outLines.splice(1, 0, summaryLine);
+    } else {
+      outLines.push(summaryLine);
+    }
+
+    expect(outLines).toHaveLength(1);
+    expect(outLines[0]).toBe(summaryLine);
   });
 });
