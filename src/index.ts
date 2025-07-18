@@ -167,7 +167,11 @@ export async function generateSummary(
   // Guard against shell argument overflow
   if (transcriptToSummarize.length > maxLength) {
     console.log(chalk.yellow(`\nTranscript too long (${transcriptToSummarize.length} chars). Truncating to ${maxLength} chars...`));
-    transcriptToSummarize = transcriptToSummarize.substring(0, maxLength) + '\n\n... (transcript truncated due to length)';
+    const truncated = transcriptToSummarize.substring(0, maxLength);
+    const lastSpace = truncated.lastIndexOf(' ');
+    const lastNewline = truncated.lastIndexOf('\n');
+    const cutPoint = Math.max(lastSpace, lastNewline);
+    transcriptToSummarize = truncated.substring(0, cutPoint > 0 ? cutPoint : maxLength) + '\n\n... (transcript truncated due to length)';
   }
   
   // Use single quotes and escape single quotes inside to avoid shell injection
@@ -204,7 +208,7 @@ async function main(sessionId: string, opts: { keep: number; dryRun?: boolean; s
   const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, opts.keep);
 
   let summaryAdded = false;
-  if (opts.summarizePruned && !opts.dryRun && droppedMessages.length > 0) {
+  if (!opts.dryRun && opts.summarizePruned && droppedMessages.length > 0) {
     spinner.start("Summarizing pruned messages with Claude...");
     try {
       const summaryContent = await generateSummary(droppedMessages);
