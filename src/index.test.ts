@@ -1,5 +1,42 @@
-import { describe, it, expect } from 'vitest';
-import { pruneSessionLines, findLatestBackup } from './index.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { pruneSessionLines, findLatestBackup, getClaudeConfigDir } from './index.js';
+import { homedir } from 'os';
+import { join } from 'path';
+
+describe('getClaudeConfigDir', () => {
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    originalEnv = process.env.CLAUDE_CONFIG_DIR;
+  });
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    } else {
+      process.env.CLAUDE_CONFIG_DIR = originalEnv;
+    }
+  });
+
+  it('should return ~/.claude when CLAUDE_CONFIG_DIR is not set', () => {
+    delete process.env.CLAUDE_CONFIG_DIR;
+    const result = getClaudeConfigDir();
+    expect(result).toBe(join(homedir(), '.claude'));
+  });
+
+  it('should return CLAUDE_CONFIG_DIR when set', () => {
+    const customPath = '/custom/claude/config';
+    process.env.CLAUDE_CONFIG_DIR = customPath;
+    const result = getClaudeConfigDir();
+    expect(result).toBe(customPath);
+  });
+
+  it('should fallback to ~/.claude when CLAUDE_CONFIG_DIR is an empty string', () => {
+    process.env.CLAUDE_CONFIG_DIR = '';
+    const result = getClaudeConfigDir();
+    expect(result).toBe(join(homedir(), '.claude'));
+  });
+});
 
 describe('pruneSessionLines', () => {
   const createMessage = (type: string, uuid: string, content: string = "test") => 
