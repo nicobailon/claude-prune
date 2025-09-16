@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a CLI tool that prunes Claude Code session transcript files (`.jsonl`) to reduce context usage. The tool operates on session files stored in `~/.claude/projects/{project-path-with-hyphens}/{sessionId}.jsonl`.
+This is a CLI tool that prunes Claude Code session transcript files (`.jsonl`) to reduce context usage. The tool operates on session files stored in `$CLAUDE_CONFIG_DIR/projects/{project-path-with-hyphens}/{sessionId}.jsonl` (where `$CLAUDE_CONFIG_DIR` defaults to `~/.claude` if not set).
 
 ## Essential Commands
 
