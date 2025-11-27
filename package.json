@@ -1,10 +1,19 @@
 {
   "name": "ccprune",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Prune early messages from Claude Code session transcripts with AI summarization",
   "author": "Nico Bailon",
   "license": "MIT",
-  "keywords": ["claude", "claude-code", "session", "prune", "jsonl", "cli", "context", "summarize"],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "session",
+    "prune",
+    "jsonl",
+    "cli",
+    "context",
+    "summarize"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/nicobailon/claude-prune.git"
