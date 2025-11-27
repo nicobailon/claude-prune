@@ -19,7 +19,8 @@ bun run test -- --coverage     # Run tests with coverage
 bun run build                  # Build for distribution
 
 # Testing the CLI locally
-bun run src/index.ts prune <sessionId> -k 10              # Prune with summary (default)
+bun run src/index.ts prune <sessionId> -k 10              # Prune by count (keep 10)
+bun run src/index.ts prune <sessionId> -p 25              # Prune by percentage (keep 25%)
 bun run src/index.ts prune <sessionId> -k 10 --no-summary # Skip summary
 bun run src/index.ts prune <sessionId> -k 10 --summary-model haiku  # Use haiku model
 bun run src/index.ts restore <sessionId>                  # Test restore command
@@ -32,6 +33,10 @@ All core logic is in `src/index.ts` with functions exported for testing.
 
 **`getClaudeConfigDir()`** - Returns Claude config directory:
 - Checks `CLAUDE_CONFIG_DIR` env var, falls back to `~/.claude`
+
+**`countAssistantMessages(lines)`** - Pre-scan for percentage calculation:
+- Counts assistant messages in lines (skips first line)
+- Used to calculate keepN from `--keep-percent`
 
 **`pruneSessionLines(lines, keepN)`** - Main pruning algorithm:
 1. Preserves first line (session metadata/summary)
@@ -57,9 +62,11 @@ All core logic is in `src/index.ts` with functions exported for testing.
 **Backup Strategy**: Creates backups in `prune-backup/` subdirectory as `{sessionId}.jsonl.{timestamp}` before modifications.
 
 **CLI Commands**:
-- `claude-prune prune <sessionId> -k <n> [--no-summary] [--summary-model <model>]` - Main pruning (summary on by default)
+- `claude-prune prune <sessionId> -k <n>` - Prune by message count
+- `claude-prune prune <sessionId> -p <percent>` - Prune by percentage (1-100)
 - `claude-prune restore <sessionId>` - Restore from latest backup
-- Backward compat: `claude-prune <sessionId> -k <n>` still works
+- Options: `--no-summary`, `--summary-model <model>`, `--dry-run`
+- Either `-k` or `-p` is required. `-k` takes priority if both are specified.
 
 ## Key Implementation Details
 

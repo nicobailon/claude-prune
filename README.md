@@ -4,7 +4,7 @@ A fast CLI tool for pruning Claude Code sessions.
 
 ## Features
 
-- **Smart Pruning**: Keep messages since the last N assistant responses
+- **Smart Pruning**: Keep messages by count (`--keep 10`) or percentage (`--keep-percent 25`)
 - **AI Summarization**: Automatically generates a summary of pruned content (enabled by default)
 - **Safe by Default**: Always preserves session summaries and metadata
 - **Auto Backup**: Creates timestamped backups before modifying files
@@ -59,10 +59,12 @@ bun install -g claude-prune
 
 ```bash
 claude-prune prune <sessionId> --keep <number> [options]
+claude-prune prune <sessionId> --keep-percent <percent> [options]
 claude-prune restore <sessionId> [--dry-run]
 
 # Shorthand (prune is default)
 claude-prune <sessionId> --keep <number> [options]
+claude-prune <sessionId> --keep-percent <percent> [options]
 ```
 
 ### Arguments
@@ -73,18 +75,24 @@ claude-prune <sessionId> --keep <number> [options]
 
 | Option | Description |
 |--------|-------------|
-| `-k, --keep <number>` | Number of assistant messages to keep (required) |
+| `-k, --keep <number>` | Number of assistant messages to keep |
+| `-p, --keep-percent <number>` | Percentage of assistant messages to keep (1-100) |
 | `--dry-run` | Preview changes and summary without modifying files |
 | `--no-summary` | Skip AI summarization of pruned messages |
 | `--summary-model <model>` | Model for summarization (haiku, sonnet, or full name) |
 | `-h, --help` | Show help information |
 | `-V, --version` | Show version number |
 
+Either `--keep` or `--keep-percent` is required. If both are provided, `--keep` takes priority.
+
 ### Examples
 
 ```bash
 # Keep the last 10 assistant messages (auto-generates summary of pruned content)
 npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
+
+# Keep the latest 25% of assistant messages (prunes older 75%)
+npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep-percent 25
 
 # Preview what would be pruned (shows summary preview too)
 npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 5 --dry-run

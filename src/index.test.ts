@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { pruneSessionLines, findLatestBackup, getClaudeConfigDir } from './index.js';
+import { pruneSessionLines, findLatestBackup, getClaudeConfigDir, countAssistantMessages } from './index.js';
 import { execSync } from 'child_process';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -350,6 +350,68 @@ describe('findLatestBackup', () => {
       name: 'abc123.jsonl.3000',
       timestamp: 3000
     });
+  });
+});
+
+describe('countAssistantMessages', () => {
+  it('should count assistant messages correctly', () => {
+    const lines = [
+      'header',
+      '{"type":"user","message":{"content":"hi"}}',
+      '{"type":"assistant","message":{"content":"hello"}}',
+      '{"type":"user","message":{"content":"bye"}}',
+      '{"type":"assistant","message":{"content":"goodbye"}}',
+    ];
+    expect(countAssistantMessages(lines)).toBe(2);
+  });
+
+  it('should skip first line (header)', () => {
+    const lines = [
+      '{"type":"assistant","message":{"content":"header"}}',
+      '{"type":"assistant","message":{"content":"real"}}',
+    ];
+    expect(countAssistantMessages(lines)).toBe(1);
+  });
+
+  it('should handle empty lines array', () => {
+    expect(countAssistantMessages([])).toBe(0);
+  });
+
+  it('should handle no assistant messages', () => {
+    const lines = [
+      'header',
+      '{"type":"user","message":{"content":"hi"}}',
+      '{"type":"system","message":{"content":"info"}}',
+    ];
+    expect(countAssistantMessages(lines)).toBe(0);
+  });
+
+  it('should handle malformed JSON gracefully', () => {
+    const lines = [
+      'header',
+      'invalid json',
+      '{"type":"assistant","message":{"content":"hello"}}',
+      '{ broken json',
+    ];
+    expect(countAssistantMessages(lines)).toBe(1);
+  });
+});
+
+describe('percentage calculation', () => {
+  it('should calculate keepN correctly from percentage', () => {
+    expect(Math.max(1, Math.ceil(10 * 25 / 100))).toBe(3);
+    expect(Math.max(1, Math.ceil(4 * 25 / 100))).toBe(1);
+    expect(Math.max(1, Math.ceil(100 * 1 / 100))).toBe(1);
+  });
+
+  it('should enforce minimum of 1 message', () => {
+    expect(Math.max(1, Math.ceil(10 * 0 / 100))).toBe(1);
+    expect(Math.max(1, Math.ceil(3 * 10 / 100))).toBe(1);
+  });
+
+  it('should handle 100% correctly', () => {
+    expect(Math.max(1, Math.ceil(10 * 100 / 100))).toBe(10);
+    expect(Math.max(1, Math.ceil(50 * 100 / 100))).toBe(50);
   });
 });
 

@@ -23,7 +23,8 @@ program
   .command("prune")
   .description("Prune early messages from a session (summarizes by default)")
   .argument("<sessionId>", "UUID of the session (without .jsonl)")
-  .requiredOption("-k, --keep <number>", "number of *message* objects to keep", parseInt)
+  .option("-k, --keep <number>", "number of assistant messages to keep", parseInt)
+  .option("-p, --keep-percent <number>", "percentage of assistant messages to keep (1-100)", parseInt)
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
@@ -39,17 +40,30 @@ program
 // For backward compatibility, make prune the default command
 program
   .argument("[sessionId]", "UUID of the session (without .jsonl)")
-  .option("-k, --keep <number>", "number of *message* objects to keep", parseInt)
+  .option("-k, --keep <number>", "number of assistant messages to keep", parseInt)
+  .option("-p, --keep-percent <number>", "percentage of assistant messages to keep (1-100)", parseInt)
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
-  .action((sessionId, opts: { keep?: number; dryRun?: boolean; summary?: boolean; summaryModel?: string }) => {
-    if (sessionId && opts.keep) {
+  .action((sessionId, opts: { keep?: number; keepPercent?: number; dryRun?: boolean; summary?: boolean; summaryModel?: string }) => {
+    if (sessionId && (opts.keep !== undefined || opts.keepPercent !== undefined)) {
       main(sessionId, opts);
     } else {
       program.help();
     }
   });
+
+// Count assistant messages (for percentage calculation)
+export function countAssistantMessages(lines: string[]): number {
+  let count = 0;
+  for (let i = 1; i < lines.length; i++) {
+    try {
+      const { type } = JSON.parse(lines[i]);
+      if (type === 'assistant') count++;
+    } catch { /* skip non-JSON */ }
+  }
+  return count;
+}
 
 // Extract core logic for testing
 export function pruneSessionLines(lines: string[], keepN: number): { outLines: string[], kept: number, dropped: number, assistantCount: number, droppedMessages: { type: string, content: string }[] } {
@@ -210,12 +224,22 @@ export async function generateSummary(
 }
 
 // ---------- Main ----------
-async function main(sessionId: string, opts: { keep: number; dryRun?: boolean; summary?: boolean; summaryModel?: string }) {
+async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; dryRun?: boolean; summary?: boolean; summaryModel?: string }) {
   const cwdProject = process.cwd().replace(/\//g, '-');
   const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
 
   if (!(await fs.pathExists(file))) {
     console.error(chalk.red(`No transcript at ${file}`));
+    process.exit(1);
+  }
+
+  if (opts.keep !== undefined && isNaN(opts.keep)) {
+    console.error(chalk.red('--keep must be a valid number'));
+    process.exit(1);
+  }
+
+  if (opts.keepPercent !== undefined && (isNaN(opts.keepPercent) || opts.keepPercent < 1 || opts.keepPercent > 100)) {
+    console.error(chalk.red('--keep-percent must be a number between 1 and 100'));
     process.exit(1);
   }
 
@@ -229,8 +253,21 @@ async function main(sessionId: string, opts: { keep: number; dryRun?: boolean; s
   const raw = await fs.readFile(file, "utf8");
   const lines = raw.split(/\r?\n/).filter(Boolean);
 
-  const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, opts.keep);
-  spinner.succeed(`${chalk.green("Scanned")} ${lines.length} lines (${kept} kept, ${dropped} dropped) - ${assistantCount} assistant messages found`);
+  let keepN = opts.keep;
+  let percentInfo = '';
+  if (keepN === undefined && opts.keepPercent !== undefined) {
+    const totalAssistant = countAssistantMessages(lines);
+    keepN = Math.max(1, Math.ceil(totalAssistant * opts.keepPercent / 100));
+    percentInfo = ` (${opts.keepPercent}% of ${totalAssistant})`;
+  }
+
+  if (keepN === undefined) {
+    spinner.fail('Either --keep or --keep-percent is required');
+    process.exit(1);
+  }
+
+  const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, keepN);
+  spinner.succeed(`${chalk.green("Scanned")} ${lines.length} lines (${kept} kept, ${dropped} dropped) - keeping ${keepN} assistant messages${percentInfo}`);
 
   // Summarization is ON by default (opts.summary is undefined or true)
   // OFF only when explicitly set to false via --no-summary
