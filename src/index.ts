@@ -6,7 +6,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
 import { confirm } from "@clack/prompts";
-import { execSync } from "child_process";
+import { spawn } from "child_process";
 
 // ---------- Helper Functions ----------
 export function getClaudeConfigDir(): string {
@@ -76,6 +76,7 @@ program
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
+  .option("--summary-timeout <ms>", "timeout for summary generation in ms (default: 360000)", parseInt)
   .action(main);
 
 program
@@ -93,7 +94,8 @@ program
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
-  .action((sessionId, opts: { keep?: number; keepPercent?: number; dryRun?: boolean; summary?: boolean; summaryModel?: string }) => {
+  .option("--summary-timeout <ms>", "timeout for summary generation in ms (default: 360000)", parseInt)
+  .action((sessionId, opts: { keep?: number; keepPercent?: number; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number }) => {
     if (sessionId) {
       main(sessionId, opts);
     } else {
@@ -231,10 +233,77 @@ function getMessageTypeLabel(type: string): string {
   return 'Assistant';
 }
 
+async function spawnClaudeAsync(
+  args: string[],
+  input: string,
+  timeoutMs: number,
+  onTick?: (elapsedSec: number) => void
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let killTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    const startTime = Date.now();
+
+    const tickInterval = onTick ? setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      onTick(elapsed);
+    }, 1000) : null;
+
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      killTimeoutId = setTimeout(() => {
+        if (!child.killed) {
+          child.kill('SIGKILL');
+        }
+      }, 5000);
+    }, timeoutMs);
+
+    child.stdout?.on('data', (data) => { stdout += data.toString(); });
+    child.stderr?.on('data', (data) => { stderr += data.toString(); });
+
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      clearTimeout(timeoutId);
+      if (killTimeoutId) clearTimeout(killTimeoutId);
+      if (tickInterval) clearInterval(tickInterval);
+      if (err.code === 'ENOENT') {
+        reject(new Error('Claude CLI not found. Make sure Claude Code is installed and the "claude" command is available.'));
+      } else {
+        reject(err);
+      }
+    });
+
+    child.on('close', (code, signal) => {
+      clearTimeout(timeoutId);
+      if (killTimeoutId) clearTimeout(killTimeoutId);
+      if (tickInterval) clearInterval(tickInterval);
+      if (timedOut) {
+        const sizeKB = Math.round(input.length / 1024);
+        reject(new Error(
+          `Summary generation timed out after ${timeoutMs / 1000}s (transcript: ${sizeKB}KB). ` +
+          `Try: --summary-model haiku (faster) or --summary-timeout 600000 (10 min)`
+        ));
+      } else if (signal) {
+        reject(new Error(`Claude CLI was killed by signal ${signal}: ${stderr}`));
+      } else if (code !== 0) {
+        reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
+      } else {
+        resolve(stdout);
+      }
+    });
+
+    child.stdin?.write(input);
+    child.stdin?.end();
+  });
+}
+
 // Extract summarization logic for testing
 export async function generateSummary(
   droppedMessages: { type: string, content: string, isSummary?: boolean }[],
-  options: { maxLength?: number; model?: string } = {}
+  options: { maxLength?: number; model?: string; timeout?: number; onProgress?: (elapsedSec: number) => void } = {}
 ): Promise<string> {
   const maxLength = options.maxLength || 60000;
 
@@ -323,26 +392,13 @@ ${transcriptToSummarize}`;
     args.push('--model', options.model);
   }
 
-  try {
-    const summaryContent = execSync(`claude ${args.join(' ')}`, {
-      input: prompt,
-      encoding: 'utf8',
-      timeout: 60000
-    });
-    return summaryContent.trim();
-  } catch (error: any) {
-    if (error.killed || error.signal === 'SIGTERM') {
-      throw new Error('Summary generation timed out. Try with --summary-model haiku for faster results.');
-    }
-    if (error.code === 'ENOENT' || error.message?.includes('not found')) {
-      throw new Error('Claude CLI not found. Make sure Claude Code is installed and the "claude" command is available.');
-    }
-    throw error;
-  }
+  const timeout = options.timeout || 360000;
+  const summaryContent = await spawnClaudeAsync(args, prompt, timeout, options.onProgress);
+  return summaryContent.trim();
 }
 
 // ---------- Main ----------
-async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; dryRun?: boolean; summary?: boolean; summaryModel?: string }) {
+async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number }) {
   const cwdProject = process.cwd().replace(/\//g, '-');
   const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
 
@@ -395,9 +451,16 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
   let summaryContent: string | null = null;
   if (shouldSummarize) {
     const modelInfo = opts.summaryModel ? ` using ${opts.summaryModel}` : '';
-    spinner.start(`Generating summary with Claude${modelInfo}...`);
+    const transcriptSize = Math.round(droppedMessages.reduce((acc, m) => acc + m.content.length, 0) / 1024);
+    spinner.start(`Generating summary with Claude${modelInfo} (${transcriptSize}KB)...`);
     try {
-      summaryContent = await generateSummary(droppedMessages, { model: opts.summaryModel });
+      summaryContent = await generateSummary(droppedMessages, {
+        model: opts.summaryModel,
+        timeout: opts.summaryTimeout,
+        onProgress: (elapsed) => {
+          spinner.text = `Generating summary with Claude${modelInfo} (${transcriptSize}KB)... ${elapsed}s`;
+        }
+      });
       spinner.succeed("Summary generated.");
     } catch (error: any) {
       spinner.fail(`Failed to generate summary: ${error.message}`);
