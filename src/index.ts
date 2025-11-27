@@ -8,6 +8,11 @@ import ora from "ora";
 import { confirm } from "@clack/prompts";
 import { execSync } from "child_process";
 
+// ---------- Helper Functions ----------
+export function getClaudeConfigDir(): string {
+  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+}
+
 // ---------- CLI Definition ----------
 const program = new Command()
   .name("claude-prune")
@@ -188,7 +193,7 @@ export async function generateSummary(
 // ---------- Main ----------
 async function main(sessionId: string, opts: { keep: number; dryRun?: boolean; summarizePruned?: boolean }) {
   const cwdProject = process.cwd().replace(/\//g, '-');
-  const file = join(homedir(), ".claude", "projects", cwdProject, `${sessionId}.jsonl`);
+  const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
 
   if (!(await fs.pathExists(file))) {
     console.error(chalk.red(`❌ No transcript at ${file}`));
@@ -242,7 +247,7 @@ async function main(sessionId: string, opts: { keep: number; dryRun?: boolean; s
     return;
   }
 
-  const backupDir = join(homedir(), ".claude", "projects", cwdProject, "prune-backup");
+  const backupDir = join(getClaudeConfigDir(), "projects", cwdProject, "prune-backup");
   await fs.ensureDir(backupDir);
   const backup = join(backupDir, `${sessionId}.jsonl.${Date.now()}`);
   await fs.copyFile(file, backup);
@@ -269,8 +274,8 @@ export function findLatestBackup(backupFiles: string[], sessionId: string): { na
 // ---------- Restore ----------
 async function restore(sessionId: string, opts: { dryRun?: boolean }) {
   const cwdProject = process.cwd().replace(/\//g, '-');
-  const file = join(homedir(), ".claude", "projects", cwdProject, `${sessionId}.jsonl`);
-  const backupDir = join(homedir(), ".claude", "projects", cwdProject, "prune-backup");
+  const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
+  const backupDir = join(getClaudeConfigDir(), "projects", cwdProject, "prune-backup");
 
   if (!(await fs.pathExists(backupDir))) {
     console.error(chalk.red(`❌ No backup directory found at ${backupDir}`));

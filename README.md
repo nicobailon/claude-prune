@@ -99,6 +99,17 @@ For example, a project at `/Users/alice/my-app` becomes:
 ~/.claude/projects/-Users-alice-my-app/{sessionId}.jsonl
 ```
 
+## Environment Variables
+
+### CLAUDE_CONFIG_DIR
+
+By default, claude-prune looks for session files in `~/.claude`. If Claude Code is configured to use a different directory, you can specify it with the `CLAUDE_CONFIG_DIR` environment variable:
+
+```bash
+# Use a custom Claude config directory
+CLAUDE_CONFIG_DIR=/custom/path/to/claude claude-prune <sessionId> --keep 50
+```
+
 ## Development
 
 ```bash

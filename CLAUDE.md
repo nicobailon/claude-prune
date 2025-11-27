@@ -4,54 +4,60 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a CLI tool that prunes Claude Code session transcript files (`.jsonl`) to reduce context usage. The tool operates on session files stored in `~/.claude/projects/{project-path-with-hyphens}/{sessionId}.jsonl`.
+CLI tool that prunes Claude Code session transcript files (`.jsonl`) to reduce context usage. Operates on session files at `$CLAUDE_CONFIG_DIR/projects/{project-path-with-hyphens}/{sessionId}.jsonl` (where `$CLAUDE_CONFIG_DIR` defaults to `~/.claude` if not set).
 
 ## Essential Commands
 
 ```bash
 # Development
 bun install                    # Install dependencies
-bun test                      # Run all tests
-bun test --watch              # Run tests in watch mode  
-bun test --coverage           # Run tests with coverage
-bun run build                 # Build for distribution
+bun run test                   # Run all tests (note: use 'bun run test', not 'bun test')
+bun run test -- --watch        # Run tests in watch mode
+bun run test -- --coverage     # Run tests with coverage
+bun run build                  # Build for distribution
 
 # Testing the CLI locally
-bun run src/index.ts prune <sessionId> -k 10   # Test prune command
-bun run src/index.ts restore <sessionId>       # Test restore command
-./dist/index.js --help                         # Test built CLI
-
-# Single test file
-bunx vitest src/index.test.ts
+bun run src/index.ts prune <sessionId> -k 10              # Test prune command
+bun run src/index.ts prune <sessionId> -k 10 --summarize-pruned  # With AI summary
+bun run src/index.ts restore <sessionId>                  # Test restore command
+./dist/index.js --help                                    # Test built CLI
 ```
 
 ## Architecture
 
-**Core Logic**: The `pruneSessionLines()` function (exported for testing) contains the main pruning algorithm that:
-1. Always preserves the first line (session metadata/summary)
-2. Finds assistant message indices and keeps everything from the Nth-to-last assistant message forward
-3. Preserves all non-message lines (tool results, system diagnostics)
-4. **Cache Token Hack**: Zeros out the last non-zero `cache_read_input_tokens` to reduce UI context percentage
+All core logic is in `src/index.ts` with functions exported for testing.
 
-**Restore Logic**: The `findLatestBackup()` function (exported for testing) handles backup file discovery:
-1. Filters files by session ID pattern (`{sessionId}.jsonl.{timestamp}`)
-2. Filters out malformed timestamps (NaN values)
-3. Sorts by timestamp and returns the most recent backup
+**`getClaudeConfigDir()`** - Returns Claude config directory:
+- Checks `CLAUDE_CONFIG_DIR` env var, falls back to `~/.claude`
 
-**Project Path Resolution**: Claude Code stores projects using hyphenated absolute paths (e.g., `/Users/alice/project` becomes `-Users-alice-project`), handled by `process.cwd().replace(/\//g, '-')`.
+**`pruneSessionLines(lines, keepN)`** - Main pruning algorithm:
+1. Preserves first line (session metadata/summary)
+2. Finds assistant message indices, keeps everything from Nth-to-last assistant message forward
+3. Preserves non-message lines (tool results, system diagnostics)
+4. **Cache Token Hack**: Zeros out the last non-zero `cache_read_input_tokens` in `usage` or `message.usage` objects to reduce UI context percentage display
 
-**Backup Strategy**: Creates backups in `prune-backup/` subdirectory with format `{sessionId}.jsonl.{timestamp}` before modifications.
+**`generateSummary(droppedMessages)`** - AI summarization (optional `--summarize-pruned` flag):
+- Shells out to `claude -p` CLI with dropped message content
+- Truncates transcript at 60K chars to avoid shell overflow
+- Returns summary starting with "Previously, we discussed..."
+- Inserts result as `{ type: "user", isCompactSummary: true, message: {...} }` after first line
 
-**CLI Commands**: 
-- `claude-prune prune <sessionId> -k <n>` - Main pruning functionality
+**`findLatestBackup(backupFiles, sessionId)`** - Backup discovery:
+- Filters by pattern `{sessionId}.jsonl.{timestamp}`
+- Filters out NaN timestamps, sorts descending
+
+**Project Path Resolution**: `/Users/alice/project` becomes `-Users-alice-project` via `process.cwd().replace(/\//g, '-')`
+
+**Backup Strategy**: Creates backups in `prune-backup/` subdirectory as `{sessionId}.jsonl.{timestamp}` before modifications.
+
+**CLI Commands**:
+- `claude-prune prune <sessionId> -k <n> [--summarize-pruned]` - Main pruning
 - `claude-prune restore <sessionId>` - Restore from latest backup
-- Backward compatibility: `claude-prune <sessionId> -k <n>` still works
-
-**Testing**: Comprehensive test suite in `src/index.test.ts` covers edge cases, message counting, core pruning logic, and restore functionality. All CLI logic is extracted into testable functions.
+- Backward compat: `claude-prune <sessionId> -k <n>` still works
 
 ## Key Implementation Details
 
-- **Message Detection**: Uses `MSG_TYPES = ["user", "assistant", "system"]` set for identifying message objects vs metadata
-- **Safe Parsing**: All JSON parsing is wrapped in try/catch to handle mixed content files
-- **Interactive Confirmation**: Uses `@clack/prompts` for user confirmation unless `--dry-run` is specified
-- **Output Format**: Maintains exact JSONL formatting with proper line endings
+- **Message Detection**: `MSG_TYPES = new Set(["user", "assistant", "system"])` distinguishes message objects from metadata/tool results
+- **Safe Parsing**: All JSON parsing wrapped in try/catch for mixed content files
+- **Interactive Confirmation**: Uses `@clack/prompts` unless `--dry-run` specified
+- **Output Format**: JSONL with `\n` line endings
