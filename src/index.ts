@@ -42,6 +42,8 @@ export function extractMessageContent(content: unknown): string {
 
         if (obj.type === 'thinking' && typeof obj.thinking === 'string') return obj.thinking;
 
+        if (obj.type === 'tool_use' && typeof obj.name === 'string') return `[Used tool: ${obj.name}]`;
+
         return '';
       })
       .filter(Boolean)

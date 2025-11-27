@@ -600,13 +600,28 @@ describe('extractMessageContent', () => {
     expect(extractMessageContent(content)).toBe('Internal reasoning here');
   });
 
+  it('should extract tool name from tool_use block', () => {
+    const content = [
+      { type: 'tool_use', id: 'toolu_01', name: 'Read', input: { file_path: '/test.ts' } }
+    ];
+    expect(extractMessageContent(content)).toBe('[Used tool: Read]');
+  });
+
+  it('should handle multiple tool_use blocks', () => {
+    const content = [
+      { type: 'tool_use', id: 'toolu_01', name: 'Glob', input: {} },
+      { type: 'tool_use', id: 'toolu_02', name: 'Read', input: {} }
+    ];
+    expect(extractMessageContent(content)).toBe('[Used tool: Glob]\n\n[Used tool: Read]');
+  });
+
   it('should handle mixed content types', () => {
     const content = [
       { type: 'text', text: 'Hello' },
       { type: 'tool_use', id: 'xyz', name: 'read_file', input: {} },
       { type: 'text', text: 'World' }
     ];
-    expect(extractMessageContent(content)).toBe('Hello\n\nWorld');
+    expect(extractMessageContent(content)).toBe('Hello\n\n[Used tool: read_file]\n\nWorld');
   });
 
   it('should handle objects with text but no type', () => {
@@ -620,7 +635,6 @@ describe('extractMessageContent', () => {
 
   it('should skip non-extractable items', () => {
     const content = [
-      { type: 'tool_use', id: 'abc', name: 'bash', input: { command: 'ls' } },
       { type: 'text', text: 'Valid text' },
       { invalid: 'object' }
     ];
@@ -632,7 +646,7 @@ describe('extractMessageContent', () => {
       { type: 'text', text: "I'll help you with that. Let me first check the file." },
       { type: 'tool_use', id: 'toolu_01', name: 'Read', input: { file_path: '/test.ts' } }
     ];
-    expect(extractMessageContent(content)).toBe("I'll help you with that. Let me first check the file.");
+    expect(extractMessageContent(content)).toBe("I'll help you with that. Let me first check the file.\n\n[Used tool: Read]");
   });
 
   it('should handle real Claude Code user message with tool result', () => {

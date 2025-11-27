@@ -15,9 +15,10 @@ Fork of [claude-prune](https://github.com/DannyAziz/claude-prune) with enhanced 
 ```bash
 # Development
 bun install                    # Install dependencies
-bun run test                   # Run all tests (note: use 'bun run test', not 'bun test')
+bun run test                   # Run all tests (uses Vitest via npm script)
 bun run test -- --watch        # Run tests in watch mode
 bun run test -- --coverage     # Run tests with coverage
+bun run test src/index.test.ts # Run a single test file
 bun run build                  # Build for distribution
 
 # Testing the CLI locally
@@ -32,7 +33,7 @@ bun run src/index.ts restore <sessionId>                  # Test restore command
 
 ## Architecture
 
-All core logic is in `src/index.ts` with functions exported for testing.
+Single-file CLI: all core logic in `src/index.ts` with functions exported for testing. Tests co-located as `src/*.test.ts`.
 
 **`getClaudeConfigDir()`** - Returns Claude config directory:
 - Checks `CLAUDE_CONFIG_DIR` env var, falls back to `~/.claude`
