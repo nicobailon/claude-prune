@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { pruneSessionLines, findLatestBackup, getClaudeConfigDir, countAssistantMessages } from './index.js';
+import { pruneSessionLines, findLatestBackup, getClaudeConfigDir, countAssistantMessages, extractMessageContent, generateUUID } from './index.js';
 import { execSync } from 'child_process';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -62,8 +62,8 @@ describe('pruneSessionLines', () => {
     expect(outLines).toHaveLength(1);
     expect(outLines[0]).toBe(lines[0]);
     expect(droppedMessages).toHaveLength(2);
-    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'test' });
-    expect(droppedMessages[1]).toEqual({ type: 'assistant', content: 'test' });
+    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'test', isSummary: false });
+    expect(droppedMessages[1]).toEqual({ type: 'assistant', content: 'test', isSummary: false });
   });
 
   it('should keep messages from last N assistant messages', () => {
@@ -212,9 +212,9 @@ describe('pruneSessionLines', () => {
     ];
     const { droppedMessages } = pruneSessionLines(lines, 1);
     expect(droppedMessages).toHaveLength(3);
-    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'Hello' });
-    expect(droppedMessages[1]).toEqual({ type: 'assistant', content: 'Hi there' });
-    expect(droppedMessages[2]).toEqual({ type: 'user', content: 'How are you?' });
+    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'Hello', isSummary: false });
+    expect(droppedMessages[1]).toEqual({ type: 'assistant', content: 'Hi there', isSummary: false });
+    expect(droppedMessages[2]).toEqual({ type: 'user', content: 'How are you?', isSummary: false });
   });
 
   it('handles messages without content gracefully', () => {
@@ -226,7 +226,7 @@ describe('pruneSessionLines', () => {
     ];
     const { droppedMessages } = pruneSessionLines(lines, 0);
     expect(droppedMessages).toHaveLength(1);
-    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'Valid message' });
+    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'Valid message', isSummary: false });
   });
 
   it('summary lines with isCompactSummary are preserved', () => {
@@ -442,9 +442,9 @@ describe('summarization behavior', () => {
     const { droppedMessages } = pruneSessionLines(lines, 1);
     
     expect(droppedMessages).toHaveLength(3);
-    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'Hello' });
-    expect(droppedMessages[1]).toEqual({ type: 'assistant', content: 'Hi there' });
-    expect(droppedMessages[2]).toEqual({ type: 'user', content: 'How are you?' });
+    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'Hello', isSummary: false });
+    expect(droppedMessages[1]).toEqual({ type: 'assistant', content: 'Hi there', isSummary: false });
+    expect(droppedMessages[2]).toEqual({ type: 'user', content: 'How are you?', isSummary: false });
   });
 
   it('should not collect dropped messages when all are kept', () => {
@@ -495,5 +495,244 @@ describe('summarization behavior', () => {
 
     expect(outLines).toHaveLength(1);
     expect(outLines[0]).toBe(summaryLine);
+  });
+});
+
+describe('isSummary flag detection', () => {
+  it('should set isSummary: true for isCompactSummary messages when dropped', () => {
+    const lines = [
+      'header line',
+      '{"type":"user","isCompactSummary":true,"message":{"content":"Previous summary"}}',
+      '{"type":"user","message":{"content":"Regular message"}}',
+      '{"type":"assistant","message":{"content":"Response"}}',
+    ];
+    const { droppedMessages } = pruneSessionLines(lines, 0);
+    expect(droppedMessages).toHaveLength(3);
+    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'Previous summary', isSummary: true });
+    expect(droppedMessages[1]).toEqual({ type: 'user', content: 'Regular message', isSummary: false });
+    expect(droppedMessages[2]).toEqual({ type: 'assistant', content: 'Response', isSummary: false });
+  });
+
+  it('should set isSummary: false when isCompactSummary is missing', () => {
+    const lines = [
+      'header line',
+      '{"type":"user","message":{"content":"Regular message"}}',
+      '{"type":"assistant","message":{"content":"Response"}}',
+    ];
+    const { droppedMessages } = pruneSessionLines(lines, 0);
+    expect(droppedMessages).toHaveLength(2);
+    expect(droppedMessages[0].isSummary).toBe(false);
+    expect(droppedMessages[1].isSummary).toBe(false);
+  });
+
+  it('should set isSummary: false when isCompactSummary is false', () => {
+    const lines = [
+      'header line',
+      '{"type":"user","isCompactSummary":false,"message":{"content":"Not a summary"}}',
+      '{"type":"assistant","message":{"content":"Response"}}',
+    ];
+    const { droppedMessages } = pruneSessionLines(lines, 0);
+    expect(droppedMessages).toHaveLength(2);
+    expect(droppedMessages[0].isSummary).toBe(false);
+  });
+});
+
+describe('default 20% pruning', () => {
+  it('should calculate 20% correctly', () => {
+    expect(Math.max(1, Math.ceil(10 * 20 / 100))).toBe(2);
+    expect(Math.max(1, Math.ceil(100 * 20 / 100))).toBe(20);
+    expect(Math.max(1, Math.ceil(5 * 20 / 100))).toBe(1);
+    expect(Math.max(1, Math.ceil(4 * 20 / 100))).toBe(1);
+    expect(Math.max(1, Math.ceil(0 * 20 / 100))).toBe(1);
+  });
+
+  it('should enforce minimum of 1 for small sessions', () => {
+    expect(Math.max(1, Math.ceil(1 * 20 / 100))).toBe(1);
+    expect(Math.max(1, Math.ceil(2 * 20 / 100))).toBe(1);
+    expect(Math.max(1, Math.ceil(3 * 20 / 100))).toBe(1);
+  });
+});
+
+describe('extractMessageContent', () => {
+  it('should return empty string for null/undefined', () => {
+    expect(extractMessageContent(null)).toBe('');
+    expect(extractMessageContent(undefined)).toBe('');
+  });
+
+  it('should return string content as-is', () => {
+    expect(extractMessageContent('Hello world')).toBe('Hello world');
+    expect(extractMessageContent('proceed')).toBe('proceed');
+  });
+
+  it('should extract text from array with text blocks', () => {
+    const content = [
+      { type: 'text', text: 'First paragraph' },
+      { type: 'text', text: 'Second paragraph' }
+    ];
+    expect(extractMessageContent(content)).toBe('First paragraph\n\nSecond paragraph');
+  });
+
+  it('should extract text from tool_result with string content', () => {
+    const content = [
+      { tool_use_id: 'abc123', type: 'tool_result', content: 'Tool output here' }
+    ];
+    expect(extractMessageContent(content)).toBe('Tool output here');
+  });
+
+  it('should extract text from tool_result with array content', () => {
+    const content = [
+      {
+        tool_use_id: 'abc123',
+        type: 'tool_result',
+        content: [
+          { type: 'text', text: 'Line 1' },
+          { type: 'text', text: 'Line 2' }
+        ]
+      }
+    ];
+    expect(extractMessageContent(content)).toBe('Line 1\nLine 2');
+  });
+
+  it('should extract thinking content', () => {
+    const content = [
+      { type: 'thinking', thinking: 'Internal reasoning here' }
+    ];
+    expect(extractMessageContent(content)).toBe('Internal reasoning here');
+  });
+
+  it('should handle mixed content types', () => {
+    const content = [
+      { type: 'text', text: 'Hello' },
+      { type: 'tool_use', id: 'xyz', name: 'read_file', input: {} },
+      { type: 'text', text: 'World' }
+    ];
+    expect(extractMessageContent(content)).toBe('Hello\n\nWorld');
+  });
+
+  it('should handle objects with text but no type', () => {
+    const content = [{ text: 'Simple text' }];
+    expect(extractMessageContent(content)).toBe('Simple text');
+  });
+
+  it('should handle empty arrays', () => {
+    expect(extractMessageContent([])).toBe('');
+  });
+
+  it('should skip non-extractable items', () => {
+    const content = [
+      { type: 'tool_use', id: 'abc', name: 'bash', input: { command: 'ls' } },
+      { type: 'text', text: 'Valid text' },
+      { invalid: 'object' }
+    ];
+    expect(extractMessageContent(content)).toBe('Valid text');
+  });
+
+  it('should handle real Claude Code assistant message content', () => {
+    const content = [
+      { type: 'text', text: "I'll help you with that. Let me first check the file." },
+      { type: 'tool_use', id: 'toolu_01', name: 'Read', input: { file_path: '/test.ts' } }
+    ];
+    expect(extractMessageContent(content)).toBe("I'll help you with that. Let me first check the file.");
+  });
+
+  it('should handle real Claude Code user message with tool result', () => {
+    const content = [
+      {
+        tool_use_id: 'toolu_01',
+        type: 'tool_result',
+        content: 'File contents here:\nLine 1\nLine 2'
+      }
+    ];
+    expect(extractMessageContent(content)).toBe('File contents here:\nLine 1\nLine 2');
+  });
+});
+
+describe('generateUUID', () => {
+  it('should generate valid UUID v4 format', () => {
+    const uuid = generateUUID();
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    expect(uuid).toMatch(uuidRegex);
+  });
+
+  it('should generate unique UUIDs', () => {
+    const uuids = new Set();
+    for (let i = 0; i < 100; i++) {
+      uuids.add(generateUUID());
+    }
+    expect(uuids.size).toBe(100);
+  });
+});
+
+describe('pruneSessionLines with array content', () => {
+  it('should extract text from array content in dropped messages', () => {
+    const lines = [
+      'header line',
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'Hello from assistant' }
+          ]
+        }
+      }),
+      JSON.stringify({
+        type: 'user',
+        message: {
+          content: [
+            { tool_use_id: 'abc', type: 'tool_result', content: 'Tool output' }
+          ]
+        }
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'Final response' }
+          ]
+        }
+      }),
+    ];
+    const { droppedMessages } = pruneSessionLines(lines, 1);
+    expect(droppedMessages).toHaveLength(2);
+    expect(droppedMessages[0].content).toBe('Hello from assistant');
+    expect(droppedMessages[1].content).toBe('Tool output');
+  });
+
+  it('should handle mixed string and array content', () => {
+    const lines = [
+      'header line',
+      JSON.stringify({
+        type: 'user',
+        message: { content: 'Simple string message' }
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'Array message' }]
+        }
+      }),
+    ];
+    const { droppedMessages } = pruneSessionLines(lines, 0);
+    expect(droppedMessages).toHaveLength(2);
+    expect(droppedMessages[0].content).toBe('Simple string message');
+    expect(droppedMessages[1].content).toBe('Array message');
+  });
+
+  it('should handle null content gracefully', () => {
+    const lines = [
+      'header line',
+      JSON.stringify({
+        type: 'user',
+        message: { content: null }
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Valid' }] }
+      }),
+    ];
+    const { droppedMessages } = pruneSessionLines(lines, 0);
+    expect(droppedMessages).toHaveLength(2);
+    expect(droppedMessages[0].content).toBe('');
+    expect(droppedMessages[1].content).toBe('Valid');
   });
 });

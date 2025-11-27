@@ -13,11 +13,57 @@ export function getClaudeConfigDir(): string {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 }
 
+export function extractMessageContent(content: unknown): string {
+  if (!content) return '';
+
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (!item || typeof item !== 'object') return '';
+
+        const obj = item as Record<string, unknown>;
+
+        if (obj.type === 'text' && typeof obj.text === 'string') return obj.text;
+        if (typeof obj.text === 'string' && !obj.type) return obj.text;
+
+        if (obj.type === 'tool_result') {
+          if (typeof obj.content === 'string') return obj.content;
+          if (Array.isArray(obj.content)) {
+            return (obj.content as Array<Record<string, unknown>>)
+              .map((c) => (typeof c.text === 'string' ? c.text : ''))
+              .join('\n');
+          }
+        }
+
+        if (obj.type === 'thinking' && typeof obj.thinking === 'string') return obj.thinking;
+
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  return '';
+}
+
+export function generateUUID(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
 // ---------- CLI Definition ----------
 const program = new Command()
   .name("ccprune")
   .description("Prune early messages from a Claude Code session.jsonl file")
-  .version("2.0.0");
+  .version("2.2.0");
 
 program
   .command("prune")
@@ -46,7 +92,7 @@ program
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
   .action((sessionId, opts: { keep?: number; keepPercent?: number; dryRun?: boolean; summary?: boolean; summaryModel?: string }) => {
-    if (sessionId && (opts.keep !== undefined || opts.keepPercent !== undefined)) {
+    if (sessionId) {
       main(sessionId, opts);
     } else {
       program.help();
@@ -66,7 +112,7 @@ export function countAssistantMessages(lines: string[]): number {
 }
 
 // Extract core logic for testing
-export function pruneSessionLines(lines: string[], keepN: number): { outLines: string[], kept: number, dropped: number, assistantCount: number, droppedMessages: { type: string, content: string }[] } {
+export function pruneSessionLines(lines: string[], keepN: number): { outLines: string[], kept: number, dropped: number, assistantCount: number, droppedMessages: { type: string, content: string, isSummary?: boolean }[] } {
   // Define message types to track and prune. Tool results and other lines are always kept.
   const MSG_TYPES = new Set(["user", "assistant", "system"]);
   const msgIndexes: number[] = [];
@@ -87,10 +133,14 @@ export function pruneSessionLines(lines: string[], keepN: number): { outLines: s
   });
 
   const keepNSafe = Math.max(0, keepN);
-  
+
   // Find the cutoff point based on last N assistant messages
-  let cutFrom = 0;
-  if (assistantIndexes.length > keepNSafe) {
+  // cutFrom = Infinity means drop all messages (keepN=0 case)
+  // cutFrom = 0 means keep all messages (keepN >= assistantCount case)
+  let cutFrom: number = 0;
+  if (keepNSafe === 0) {
+    cutFrom = Infinity; // Drop all messages
+  } else if (assistantIndexes.length > keepNSafe) {
     cutFrom = assistantIndexes[assistantIndexes.length - keepNSafe];
   }
 
@@ -98,7 +148,7 @@ export function pruneSessionLines(lines: string[], keepN: number): { outLines: s
   const outLines: string[] = [];
   let kept = 0;
   let dropped = 0;
-  const droppedMessages: { type: string, content: string }[] = [];
+  const droppedMessages: { type: string, content: string, isSummary?: boolean }[] = [];
 
   // Always include first line
   if (lines.length > 0) {
@@ -151,11 +201,12 @@ export function pruneSessionLines(lines: string[], keepN: number): { outLines: s
       if (idx >= cutFrom) { 
         kept++; 
         outLines.push(ln); 
-      } else { 
+      } else {
         dropped++;
-        const { type, message } = parsedObj;
-        if (message?.content) {
-          droppedMessages.push({ type, content: message.content });
+        const { type, message, isCompactSummary } = parsedObj;
+        if (message?.content !== undefined) {
+          const contentStr = extractMessageContent(message.content);
+          droppedMessages.push({ type, content: contentStr, isSummary: isCompactSummary === true });
         }
       }
     } else {
@@ -180,12 +231,21 @@ function getMessageTypeLabel(type: string): string {
 
 // Extract summarization logic for testing
 export async function generateSummary(
-  droppedMessages: { type: string, content: string }[],
+  droppedMessages: { type: string, content: string, isSummary?: boolean }[],
   options: { maxLength?: number; model?: string } = {}
 ): Promise<string> {
   const maxLength = options.maxLength || 60000;
 
-  let transcriptToSummarize = droppedMessages
+  // Separate existing summary from chat messages for synthesis
+  const existingSummary = droppedMessages.find(m => m.isSummary);
+  const chatMessages = droppedMessages.filter(m => !m.isSummary);
+
+  // If only summary is being dropped (no chat messages), return it unchanged
+  if (existingSummary && chatMessages.length === 0) {
+    return existingSummary.content;
+  }
+
+  let transcriptToSummarize = chatMessages
     .map(msg => `${getMessageTypeLabel(msg.type)}: ${msg.content}`)
     .join('\n\n');
 
@@ -198,7 +258,20 @@ export async function generateSummary(
     transcriptToSummarize = truncated.substring(0, cutPoint > 0 ? cutPoint : maxLength) + '\n\n... (transcript truncated due to length)';
   }
 
-  const prompt = `The following is a transcript of a conversation that is about to be pruned from my session. Please provide a very concise, one-paragraph summary of what was discussed and accomplished. Start the summary with "Previously, we discussed...". The summary will be used as a memory for me. Here is the transcript:\n\n${transcriptToSummarize}`;
+  let prompt: string;
+  if (existingSummary) {
+    // Synthesis mode: combine old summary + new messages
+    prompt = `I have an existing summary of earlier work, followed by a more recent conversation that is being pruned. Please synthesize these into a single coherent summary paragraph. Start with "Previously, we discussed...".
+
+EXISTING SUMMARY:
+${existingSummary.content}
+
+MORE RECENT CONVERSATION TO INCORPORATE:
+${transcriptToSummarize}`;
+  } else {
+    // Fresh summary (no existing summary)
+    prompt = `The following is a transcript of a conversation that is about to be pruned from my session. Please provide a very concise, one-paragraph summary of what was discussed and accomplished. Start the summary with "Previously, we discussed...". The summary will be used as a memory for me. Here is the transcript:\n\n${transcriptToSummarize}`;
+  }
 
   const args = ['-p'];
   if (options.model) {
@@ -262,8 +335,9 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
   }
 
   if (keepN === undefined) {
-    spinner.fail('Either --keep or --keep-percent is required');
-    process.exit(1);
+    const totalAssistant = countAssistantMessages(lines);
+    keepN = Math.max(1, Math.ceil(totalAssistant * 20 / 100));
+    percentInfo = ` (default 20% of ${totalAssistant})`;
   }
 
   const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, keepN);
@@ -287,6 +361,12 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
     }
   }
 
+  // When --no-summary but existing summary was dropped, preserve it
+  const existingSummaryInDropped = droppedMessages.find(m => m.isSummary);
+  if (!shouldSummarize && existingSummaryInDropped) {
+    summaryContent = existingSummaryInDropped.content;
+  }
+
   // Dry-run: show preview and exit
   if (opts.dryRun) {
     console.log(chalk.cyan("\nDry-run preview:"));
@@ -304,10 +384,39 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
 
   // Insert summary if generated
   if (summaryContent) {
+    // Extract context from first real message (skip file-history-snapshot if present)
+    let sessionContext = { sessionId: '', cwd: '', slug: '', gitBranch: '', version: '2.0.53' };
+
+    for (let i = 1; i < outLines.length && i < 10; i++) {
+      try {
+        const parsed = JSON.parse(outLines[i]);
+        if (parsed.type === 'user' || parsed.type === 'assistant') {
+          sessionContext = {
+            sessionId: parsed.sessionId || '',
+            cwd: parsed.cwd || '',
+            slug: parsed.slug || '',
+            gitBranch: parsed.gitBranch || '',
+            version: parsed.version || '2.0.53'
+          };
+          break;
+        }
+      } catch { /* not JSON */ }
+    }
+
     const summaryLine = JSON.stringify({
       type: "user",
       isCompactSummary: true,
-      message: { content: summaryContent }
+      message: { role: "user", content: summaryContent },
+      uuid: generateUUID(),
+      timestamp: new Date().toISOString(),
+      parentUuid: null,
+      sessionId: sessionContext.sessionId,
+      cwd: sessionContext.cwd,
+      slug: sessionContext.slug,
+      gitBranch: sessionContext.gitBranch,
+      version: sessionContext.version,
+      isSidechain: false,
+      userType: "external"
     });
 
     if (outLines.length > 0) {

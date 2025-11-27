@@ -190,4 +190,70 @@ describe('generateSummary', () => {
       expect.any(Object)
     );
   });
+
+  it('should return existing summary unchanged when only summary is dropped', async () => {
+    const droppedMessages = [
+      { type: 'user', content: 'Previously, we discussed the architecture.', isSummary: true }
+    ];
+
+    const result = await generateSummary(droppedMessages);
+
+    expect(result).toBe('Previously, we discussed the architecture.');
+    expect(execSync).not.toHaveBeenCalled();
+  });
+
+  it('should use synthesis prompt when existing summary and chat messages', async () => {
+    vi.mocked(execSync).mockReturnValue('Synthesized summary\n');
+
+    const droppedMessages = [
+      { type: 'user', content: 'Old summary content', isSummary: true },
+      { type: 'user', content: 'New question' },
+      { type: 'assistant', content: 'New answer' }
+    ];
+
+    await generateSummary(droppedMessages);
+
+    const call = vi.mocked(execSync).mock.calls[0];
+    const options = call[1] as { input: string };
+
+    expect(options.input).toContain('EXISTING SUMMARY:');
+    expect(options.input).toContain('Old summary content');
+    expect(options.input).toContain('MORE RECENT CONVERSATION TO INCORPORATE:');
+    expect(options.input).toContain('New question');
+    expect(options.input).toContain('New answer');
+  });
+
+  it('should exclude existing summary from chat transcript in synthesis mode', async () => {
+    vi.mocked(execSync).mockReturnValue('Synthesized\n');
+
+    const droppedMessages = [
+      { type: 'user', content: 'This is the old summary', isSummary: true },
+      { type: 'user', content: 'Regular chat message' }
+    ];
+
+    await generateSummary(droppedMessages);
+
+    const call = vi.mocked(execSync).mock.calls[0];
+    const options = call[1] as { input: string };
+
+    const chatSection = options.input.split('MORE RECENT CONVERSATION TO INCORPORATE:')[1];
+    expect(chatSection).not.toContain('This is the old summary');
+    expect(chatSection).toContain('Regular chat message');
+  });
+
+  it('should handle messages without isSummary field (default to false)', async () => {
+    vi.mocked(execSync).mockReturnValue('Summary\n');
+
+    const droppedMessages = [
+      { type: 'user', content: 'Message without isSummary field' }
+    ];
+
+    await generateSummary(droppedMessages);
+
+    const call = vi.mocked(execSync).mock.calls[0];
+    const options = call[1] as { input: string };
+
+    expect(options.input).toContain('Message without isSummary field');
+    expect(options.input).not.toContain('EXISTING SUMMARY:');
+  });
 });

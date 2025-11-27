@@ -6,8 +6,10 @@ A fast CLI tool for pruning Claude Code sessions with AI-powered summarization.
 
 ## Features
 
+- **Zero-Config Default**: Just run `ccprune <sessionId>` - defaults to keeping 20% of messages
 - **Smart Pruning**: Keep messages by count (`--keep 10`) or percentage (`--keep-percent 25`)
 - **AI Summarization**: Automatically generates a summary of pruned content (enabled by default)
+- **Summary Synthesis**: Re-pruning synthesizes old summary + new pruned content into one cohesive summary
 - **Safe by Default**: Always preserves session summaries and metadata
 - **Auto Backup**: Creates timestamped backups before modifying files
 - **Restore Support**: Easily restore from backups with the `restore` command
@@ -48,6 +50,10 @@ bun install -g ccprune
 
 3. **Run prune** from the same project directory:
    ```bash
+   # Simplest: just the session ID (keeps 20% of messages by default)
+   npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6
+
+   # Or specify how much to keep
    npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
    ```
 
@@ -60,13 +66,16 @@ bun install -g ccprune
 ## Usage
 
 ```bash
-ccprune prune <sessionId> --keep <number> [options]
-ccprune prune <sessionId> --keep-percent <percent> [options]
-ccprune restore <sessionId> [--dry-run]
+# Zero-config: defaults to keeping 20% of messages
+ccprune <sessionId>
 
-# Shorthand (prune is default)
-ccprune <sessionId> --keep <number> [options]
-ccprune <sessionId> --keep-percent <percent> [options]
+# Explicit options
+ccprune <sessionId> --keep <number>
+ccprune <sessionId> --keep-percent <percent>
+
+# Subcommands
+ccprune prune <sessionId> [options]
+ccprune restore <sessionId> [--dry-run]
 ```
 
 ### Arguments
@@ -85,12 +94,15 @@ ccprune <sessionId> --keep-percent <percent> [options]
 | `-h, --help` | Show help information |
 | `-V, --version` | Show version number |
 
-Either `--keep` or `--keep-percent` is required. If both are provided, `--keep` takes priority.
+If no option is specified, defaults to `--keep-percent 20`. If both `--keep` and `--keep-percent` are provided, `--keep` takes priority.
 
 ### Examples
 
 ```bash
-# Keep the last 10 assistant messages (auto-generates summary of pruned content)
+# Simplest: just session ID (keeps 20% by default, generates summary)
+npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6
+
+# Keep the last 10 assistant messages
 npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
 
 # Keep the latest 25% of assistant messages (prunes older 75%)
@@ -115,9 +127,10 @@ npx ccprune restore 03953bb8-6855-4e53-a987-e11422a03fc6
 2. **Preserves Critical Data**: Always keeps the first line (session summary/metadata)
 3. **Smart Pruning**: Finds the Nth-to-last assistant message and keeps everything from that point forward
 4. **AI Summarization**: Generates a concise summary of pruned content using Claude CLI
-5. **Preserves Context**: Keeps all non-message lines (tool results, system messages)
-6. **Safe Backup**: Creates backup in `prune-backup/` before modifying
-7. **Interactive Confirmation**: Asks for confirmation unless using `--dry-run`
+5. **Summary Synthesis**: When re-pruning a session that already has a summary, synthesizes the old summary + newly pruned messages into one cohesive summary
+6. **Preserves Context**: Keeps all non-message lines (tool results, system messages)
+7. **Safe Backup**: Creates backup in `prune-backup/` before modifying
+8. **Interactive Confirmation**: Asks for confirmation unless using `--dry-run`
 
 ## File Structure
 
@@ -145,21 +158,26 @@ CLAUDE_CONFIG_DIR=/custom/path/to/claude ccprune <sessionId> --keep 50
 
 ## Migrating from claude-prune
 
-If you were using the original `claude-prune` package, `ccprune` v2.0 has these changes:
+If you were using the original `claude-prune` package, `ccprune` v2.x has these changes:
 
 ```bash
-# claude-prune v1.x (summary was opt-in)
+# claude-prune v1.x (summary was opt-in, -k required)
 claude-prune <id> -k 10 --summarize-pruned
 
-# ccprune v2.0 (summary is default, opt-out with --no-summary)
-ccprune <id> -k 10              # includes summary
+# ccprune v2.x (zero-config default, summary enabled by default)
+ccprune <id>                    # defaults to 20%, includes summary
+ccprune <id> -k 10              # explicit count, includes summary
 ccprune <id> -k 10 --no-summary # skips summary
 
 # New in ccprune: percentage-based pruning
 ccprune <id> --keep-percent 25  # keep latest 25%
 ```
 
-The `--summarize-pruned` flag has been removed. Use `--no-summary` to disable summarization.
+**Key changes:**
+- `-k` or `-p` flags are now optional (defaults to `--keep-percent 20`)
+- Summary is enabled by default (use `--no-summary` to disable)
+- Re-pruning synthesizes old summary + new pruned content into one summary
+- `--summarize-pruned` flag removed (summary is always on unless `--no-summary`)
 
 ## Development
 

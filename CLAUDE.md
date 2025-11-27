@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Fork of [claude-prune](https://github.com/DannyAziz/claude-prune) with enhanced features.
 
-**v2.0**: Summarization is enabled by default. Use `--no-summary` to skip.
+**v2.x**: Summarization enabled by default, zero-config default (20%), summary synthesis on re-prune.
 
 ## Essential Commands
 
@@ -21,6 +21,7 @@ bun run test -- --coverage     # Run tests with coverage
 bun run build                  # Build for distribution
 
 # Testing the CLI locally
+bun run src/index.ts prune <sessionId>                    # Zero-config: defaults to 20%
 bun run src/index.ts prune <sessionId> -k 10              # Prune by count (keep 10)
 bun run src/index.ts prune <sessionId> -p 25              # Prune by percentage (keep 25%)
 bun run src/index.ts prune <sessionId> -k 10 --no-summary # Skip summary
@@ -45,9 +46,12 @@ All core logic is in `src/index.ts` with functions exported for testing.
 2. Finds assistant message indices, keeps everything from Nth-to-last assistant message forward
 3. Preserves non-message lines (tool results, system diagnostics)
 4. **Cache Token Hack**: Zeros out the last non-zero `cache_read_input_tokens` in `usage` or `message.usage` objects to reduce UI context percentage display
-5. Returns `droppedMessages[]` for summarization
+5. Returns `droppedMessages[]` with `isSummary` flag for each message (detects `isCompactSummary: true`)
 
 **`generateSummary(droppedMessages, options)`** - AI summarization:
+- Separates existing summary (`isSummary: true`) from chat messages
+- **Summary Synthesis**: If existing summary found, uses special prompt to synthesize old summary + new messages
+- **Edge Case**: If only summary dropped (no chat), returns it unchanged
 - Formats transcript with proper labels (User/Assistant/System)
 - Truncates at `maxLength` (default 60K chars) to avoid issues
 - Uses stdin to pipe prompt to `claude -p` CLI (no shell escaping needed)
@@ -64,11 +68,13 @@ All core logic is in `src/index.ts` with functions exported for testing.
 **Backup Strategy**: Creates backups in `prune-backup/` subdirectory as `{sessionId}.jsonl.{timestamp}` before modifications.
 
 **CLI Commands**:
-- `ccprune prune <sessionId> -k <n>` - Prune by message count
-- `ccprune prune <sessionId> -p <percent>` - Prune by percentage (1-100)
+- `ccprune <sessionId>` - Zero-config: defaults to `--keep-percent 20`
+- `ccprune <sessionId> -k <n>` - Prune by message count
+- `ccprune <sessionId> -p <percent>` - Prune by percentage (1-100)
 - `ccprune restore <sessionId>` - Restore from latest backup
 - Options: `--no-summary`, `--summary-model <model>`, `--dry-run`
-- Either `-k` or `-p` is required. `-k` takes priority if both are specified.
+- Priority: `-k` > `-p` > default 20%
+- `--no-summary` with existing summary: preserves existing summary as-is
 
 ## Key Implementation Details
 
