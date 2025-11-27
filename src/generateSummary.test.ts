@@ -107,9 +107,13 @@ describe('generateSummary', () => {
     const call = vi.mocked(execSync).mock.calls[0];
     const options = call[1] as { input: string };
 
-    expect(options.input).toContain('provide a very concise, one-paragraph summary');
-    expect(options.input).toContain('Start the summary with "Previously, we discussed..."');
-    expect(options.input).toContain('The summary will be used as a memory');
+    expect(options.input).toContain('summarizing a coding conversation');
+    expect(options.input).toContain('Previously, we discussed');
+    expect(options.input).toContain('## 1. Overview');
+    expect(options.input).toContain('## 2. What Was Accomplished');
+    expect(options.input).toContain('## 3. Files Modified or Examined');
+    expect(options.input).toContain('## 4. Key Technical Details');
+    expect(options.input).toContain('## 5. Current State & Pending Work');
   });
 
   it('should handle empty messages array', async () => {
@@ -216,9 +220,9 @@ describe('generateSummary', () => {
     const call = vi.mocked(execSync).mock.calls[0];
     const options = call[1] as { input: string };
 
-    expect(options.input).toContain('EXISTING SUMMARY:');
+    expect(options.input).toContain('## Existing Summary:');
     expect(options.input).toContain('Old summary content');
-    expect(options.input).toContain('MORE RECENT CONVERSATION TO INCORPORATE:');
+    expect(options.input).toContain('## Recent Conversation to Incorporate:');
     expect(options.input).toContain('New question');
     expect(options.input).toContain('New answer');
   });
@@ -236,7 +240,7 @@ describe('generateSummary', () => {
     const call = vi.mocked(execSync).mock.calls[0];
     const options = call[1] as { input: string };
 
-    const chatSection = options.input.split('MORE RECENT CONVERSATION TO INCORPORATE:')[1];
+    const chatSection = options.input.split('## Recent Conversation to Incorporate:')[1];
     expect(chatSection).not.toContain('This is the old summary');
     expect(chatSection).toContain('Regular chat message');
   });
@@ -254,6 +258,6 @@ describe('generateSummary', () => {
     const options = call[1] as { input: string };
 
     expect(options.input).toContain('Message without isSummary field');
-    expect(options.input).not.toContain('EXISTING SUMMARY:');
+    expect(options.input).not.toContain('## Existing Summary:');
   });
 });

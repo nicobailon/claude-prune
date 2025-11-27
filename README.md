@@ -124,11 +124,11 @@ npx ccprune restore 03953bb8-6855-4e53-a987-e11422a03fc6
 ## How It Works
 
 1. **Locates Session File**: Finds `$CLAUDE_CONFIG_DIR/projects/{project-path}/{sessionId}.jsonl`
-2. **Preserves Critical Data**: Always keeps the first line (session summary/metadata)
+2. **Preserves Critical Data**: Always keeps the first line (file-history-snapshot or session metadata)
 3. **Smart Pruning**: Finds the Nth-to-last assistant message and keeps everything from that point forward
-4. **AI Summarization**: Generates a concise summary of pruned content using Claude CLI
+4. **AI Summarization**: Generates a structured summary of pruned content (files modified, accomplishments, pending work, key technical details)
 5. **Summary Synthesis**: When re-pruning a session that already has a summary, synthesizes the old summary + newly pruned messages into one cohesive summary
-6. **Preserves Context**: Keeps all non-message lines (tool results, system messages)
+6. **Preserves Context**: Keeps all non-message lines (tool results, file-history-snapshots)
 7. **Safe Backup**: Creates backup in `prune-backup/` before modifying
 8. **Interactive Confirmation**: Asks for confirmation unless using `--dry-run`
 

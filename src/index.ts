@@ -263,16 +263,59 @@ export async function generateSummary(
   let prompt: string;
   if (existingSummary) {
     // Synthesis mode: combine old summary + new messages
-    prompt = `I have an existing summary of earlier work, followed by a more recent conversation that is being pruned. Please synthesize these into a single coherent summary paragraph. Start with "Previously, we discussed...".
+    prompt = `You have an existing summary of earlier work, followed by a more recent conversation that needs to be incorporated. Create a unified comprehensive summary.
 
-EXISTING SUMMARY:
+## Instructions
+1. Preserve critical context from the existing summary that remains relevant
+2. Integrate new accomplishments, decisions, and file changes from the recent conversation
+3. Update the "Current State & Pending Work" section to reflect the latest status
+4. Remove outdated details that are no longer relevant
+5. Maintain the structured format with all sections
+
+## Existing Summary:
 ${existingSummary.content}
 
-MORE RECENT CONVERSATION TO INCORPORATE:
-${transcriptToSummarize}`;
+## Recent Conversation to Incorporate:
+${transcriptToSummarize}
+
+Produce a single cohesive summary that starts with "Previously, we discussed..." and follows the standard section format (Overview, What Was Accomplished, Files Modified, Key Technical Details, Current State & Pending Work).`;
   } else {
     // Fresh summary (no existing summary)
-    prompt = `The following is a transcript of a conversation that is about to be pruned from my session. Please provide a very concise, one-paragraph summary of what was discussed and accomplished. Start the summary with "Previously, we discussed...". The summary will be used as a memory for me. Here is the transcript:\n\n${transcriptToSummarize}`;
+    prompt = `You are summarizing a coding conversation that is being pruned to reduce context. Create a comprehensive structured summary that preserves essential information for continuing the work seamlessly.
+
+Analyze the transcript and produce a summary with these sections:
+
+## 1. Overview
+Start with "Previously, we discussed..." and provide a high-level summary of the conversation goals and context.
+
+## 2. What Was Accomplished
+- Concrete outcomes and changes made
+- Decisions finalized
+- Problems solved
+
+## 3. Files Modified or Examined
+List each file with a brief note on what was done:
+- \`path/to/file.ts\` - description of changes or why it was examined
+
+## 4. Key Technical Details
+Important patterns, conventions, architectural decisions, or technical context needed to continue:
+- Include brief code snippets ONLY for critical patterns or non-obvious implementations
+- Note any established conventions or constraints
+
+## 5. Current State & Pending Work
+- What was being worked on immediately before this summary
+- Any incomplete tasks or planned next steps
+- Outstanding issues or blockers
+
+## Format Guidelines
+- Be comprehensive - this summary replaces the pruned conversation
+- Include specific file paths, function names, and line numbers where relevant
+- For code snippets, only include what's essential to understand the pattern (not full implementations)
+- If the task evolved during the conversation, note the progression
+
+Here is the transcript to summarize:
+
+${transcriptToSummarize}`;
   }
 
   const args = ['-p'];

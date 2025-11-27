@@ -42,10 +42,16 @@ Single-file CLI: all core logic in `src/index.ts` with functions exported for te
 - Counts assistant messages in lines (skips first line)
 - Used to calculate keepN from `--keep-percent`
 
+**`extractMessageContent(content)`** - Extracts text from message content:
+- Handles string content directly
+- Handles array content with multiple block types: `text`, `tool_result`, `thinking`, `tool_use`
+- Returns `[Used tool: ToolName]` for tool_use blocks (for summary context)
+- Filters empty results and joins with `\n\n`
+
 **`pruneSessionLines(lines, keepN)`** - Main pruning algorithm:
-1. Preserves first line (session metadata/summary)
+1. Preserves first line (file-history-snapshot or session metadata)
 2. Finds assistant message indices, keeps everything from Nth-to-last assistant message forward
-3. Preserves non-message lines (tool results, system diagnostics)
+3. Preserves non-message lines (tool results, file-history-snapshots)
 4. **Cache Token Hack**: Zeros out the last non-zero `cache_read_input_tokens` in `usage` or `message.usage` objects to reduce UI context percentage display
 5. Returns `droppedMessages[]` with `isSummary` flag for each message (detects `isCompactSummary: true`)
 
@@ -53,6 +59,7 @@ Single-file CLI: all core logic in `src/index.ts` with functions exported for te
 - Separates existing summary (`isSummary: true`) from chat messages
 - **Summary Synthesis**: If existing summary found, uses special prompt to synthesize old summary + new messages
 - **Edge Case**: If only summary dropped (no chat), returns it unchanged
+- **Structured Output**: Generates summary with 5 sections (Overview, What Was Accomplished, Files Modified, Key Technical Details, Current State & Pending Work)
 - Formats transcript with proper labels (User/Assistant/System)
 - Truncates at `maxLength` (default 60K chars) to avoid issues
 - Uses stdin to pipe prompt to `claude -p` CLI (no shell escaping needed)
