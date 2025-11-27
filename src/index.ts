@@ -7,6 +7,7 @@ import chalk from "chalk";
 import ora from "ora";
 import { confirm } from "@clack/prompts";
 import { spawn } from "child_process";
+import { createSummaryProgress } from "./progress.js";
 
 // ---------- Helper Functions ----------
 export function getClaudeConfigDir(): string {
@@ -237,7 +238,7 @@ async function spawnClaudeAsync(
   args: string[],
   input: string,
   timeoutMs: number,
-  onTick?: (elapsedSec: number) => void
+  onTick?: () => void
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -245,11 +246,9 @@ async function spawnClaudeAsync(
     let stderr = '';
     let timedOut = false;
     let killTimeoutId: ReturnType<typeof setTimeout> | null = null;
-    const startTime = Date.now();
 
     const tickInterval = onTick ? setInterval(() => {
-      const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      onTick(elapsed);
+      onTick();
     }, 1000) : null;
 
     const timeoutId = setTimeout(() => {
@@ -303,7 +302,7 @@ async function spawnClaudeAsync(
 // Extract summarization logic for testing
 export async function generateSummary(
   droppedMessages: { type: string, content: string, isSummary?: boolean }[],
-  options: { maxLength?: number; model?: string; timeout?: number; onProgress?: (elapsedSec: number) => void } = {}
+  options: { maxLength?: number; model?: string; timeout?: number; onProgress?: () => void } = {}
 ): Promise<string> {
   const maxLength = options.maxLength || 60000;
 
@@ -450,20 +449,24 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
 
   let summaryContent: string | null = null;
   if (shouldSummarize) {
-    const modelInfo = opts.summaryModel ? ` using ${opts.summaryModel}` : '';
     const transcriptSize = Math.round(droppedMessages.reduce((acc, m) => acc + m.content.length, 0) / 1024);
-    spinner.start(`Generating summary with Claude${modelInfo} (${transcriptSize}KB)...`);
+
+    const progress = createSummaryProgress({
+      transcriptKB: transcriptSize,
+      model: opts.summaryModel
+    });
+
+    progress.start();
+
     try {
       summaryContent = await generateSummary(droppedMessages, {
         model: opts.summaryModel,
         timeout: opts.summaryTimeout,
-        onProgress: (elapsed) => {
-          spinner.text = `Generating summary with Claude${modelInfo} (${transcriptSize}KB)... ${elapsed}s`;
-        }
+        onProgress: () => progress.update()
       });
-      spinner.succeed("Summary generated.");
+      progress.succeed();
     } catch (error: any) {
-      spinner.fail(`Failed to generate summary: ${error.message}`);
+      progress.fail(`Failed to generate summary: ${error.message}`);
       console.error(chalk.red(error.message));
       process.exit(1);
     }

@@ -358,29 +358,29 @@ describe('generateSummary', () => {
     await expect(resultPromise).rejects.toThrow('timed out after 360s');
   });
 
-  it('should call onProgress callback with elapsed time', async () => {
+  it('should call onProgress callback periodically', async () => {
     const mock = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mock.child);
 
-    const progressCalls: number[] = [];
+    let progressCallCount = 0;
     const resultPromise = generateSummary(
       [{ type: 'user', content: 'test' }],
       {
-        onProgress: (elapsed) => progressCalls.push(elapsed)
+        onProgress: () => { progressCallCount++; }
       }
     );
 
     vi.advanceTimersByTime(1000);
-    expect(progressCalls).toContain(1);
+    expect(progressCallCount).toBe(1);
 
     vi.advanceTimersByTime(1000);
-    expect(progressCalls).toContain(2);
+    expect(progressCallCount).toBe(2);
 
     mock.stdout.emit('data', 'Summary\n');
     mock.emit('close', 0);
 
     await resultPromise;
-    expect(progressCalls.length).toBeGreaterThanOrEqual(2);
+    expect(progressCallCount).toBeGreaterThanOrEqual(2);
   });
 
   it('should respect custom timeout option', async () => {
