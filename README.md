@@ -33,6 +33,28 @@ npm install -g claude-prune
 bun install -g claude-prune
 ```
 
+## Quick Start
+
+**Step-by-step workflow:**
+
+1. **In Claude Code**, run `/status` to find your Session ID:
+   ```
+   Session ID: 03953bb8-6855-4e53-a987-e11422a03fc6
+   ```
+
+2. **Quit Claude Code** (Ctrl+C or type `/quit`)
+
+3. **Run prune** from the same project directory:
+   ```bash
+   npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
+   ```
+
+4. **Resume Claude Code** and select your session:
+   ```bash
+   claude --resume
+   ```
+   Use arrow keys to find your pruned session in the list.
+
 ## Usage
 
 ```bash
@@ -45,7 +67,7 @@ claude-prune <sessionId> --keep <number> [options]
 
 ### Arguments
 
-- `sessionId`: UUID of the Claude Code session (without .jsonl extension)
+- `sessionId`: UUID of the Claude Code session (find it via `/status` in Claude Code)
 
 ### Options
 
@@ -62,19 +84,19 @@ claude-prune <sessionId> --keep <number> [options]
 
 ```bash
 # Keep the last 10 assistant messages (auto-generates summary of pruned content)
-claude-prune abc123-def456-789 --keep 10
+npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
 
 # Preview what would be pruned (shows summary preview too)
-claude-prune abc123-def456-789 --keep 5 --dry-run
+npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 5 --dry-run
 
 # Skip summarization for faster pruning
-claude-prune abc123-def456-789 --keep 10 --no-summary
+npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10 --no-summary
 
 # Use a specific model for summarization (haiku is faster/cheaper)
-claude-prune abc123-def456-789 --keep 10 --summary-model haiku
+npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10 --summary-model haiku
 
 # Restore from the latest backup
-claude-prune restore abc123-def456-789
+npx claude-prune restore 03953bb8-6855-4e53-a987-e11422a03fc6
 ```
 
 ## How It Works
