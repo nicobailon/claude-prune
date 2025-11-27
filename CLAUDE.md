@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CLI tool that prunes Claude Code session transcript files (`.jsonl`) to reduce context usage. Operates on session files at `$CLAUDE_CONFIG_DIR/projects/{project-path-with-hyphens}/{sessionId}.jsonl` (where `$CLAUDE_CONFIG_DIR` defaults to `~/.claude` if not set).
+**ccprune** - CLI tool that prunes Claude Code session transcript files (`.jsonl`) to reduce context usage. Operates on session files at `$CLAUDE_CONFIG_DIR/projects/{project-path-with-hyphens}/{sessionId}.jsonl` (where `$CLAUDE_CONFIG_DIR` defaults to `~/.claude` if not set).
+
+Fork of [claude-prune](https://github.com/DannyAziz/claude-prune) with enhanced features.
 
 **v2.0**: Summarization is enabled by default. Use `--no-summary` to skip.
 
@@ -62,9 +64,9 @@ All core logic is in `src/index.ts` with functions exported for testing.
 **Backup Strategy**: Creates backups in `prune-backup/` subdirectory as `{sessionId}.jsonl.{timestamp}` before modifications.
 
 **CLI Commands**:
-- `claude-prune prune <sessionId> -k <n>` - Prune by message count
-- `claude-prune prune <sessionId> -p <percent>` - Prune by percentage (1-100)
-- `claude-prune restore <sessionId>` - Restore from latest backup
+- `ccprune prune <sessionId> -k <n>` - Prune by message count
+- `ccprune prune <sessionId> -p <percent>` - Prune by percentage (1-100)
+- `ccprune restore <sessionId>` - Restore from latest backup
 - Options: `--no-summary`, `--summary-model <model>`, `--dry-run`
 - Either `-k` or `-p` is required. `-k` takes priority if both are specified.
 

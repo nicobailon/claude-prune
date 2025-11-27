@@ -15,7 +15,7 @@ export function getClaudeConfigDir(): string {
 
 // ---------- CLI Definition ----------
 const program = new Command()
-  .name("claude-prune")
+  .name("ccprune")
   .description("Prune early messages from a Claude Code session.jsonl file")
   .version("2.0.0");
 

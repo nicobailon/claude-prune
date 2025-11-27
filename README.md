@@ -1,6 +1,8 @@
-# claude-prune
+# ccprune
 
-A fast CLI tool for pruning Claude Code sessions.
+A fast CLI tool for pruning Claude Code sessions with AI-powered summarization.
+
+> Fork of [claude-prune](https://github.com/DannyAziz/claude-prune) with enhanced features: percentage-based pruning, AI summarization enabled by default, and improved UX.
 
 ## Features
 
@@ -17,20 +19,20 @@ A fast CLI tool for pruning Claude Code sessions.
 
 ```bash
 # Using npx (Node.js)
-npx claude-prune <sessionId> --keep 50
+npx ccprune <sessionId> --keep 50
 
 # Using bunx (Bun)
-bunx claude-prune <sessionId> --keep 50
+bunx ccprune <sessionId> --keep 50
 ```
 
 ### Install globally
 
 ```bash
 # Using npm
-npm install -g claude-prune
+npm install -g ccprune
 
 # Using bun
-bun install -g claude-prune
+bun install -g ccprune
 ```
 
 ## Quick Start
@@ -46,7 +48,7 @@ bun install -g claude-prune
 
 3. **Run prune** from the same project directory:
    ```bash
-   npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
+   npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
    ```
 
 4. **Resume Claude Code** and select your session:
@@ -58,13 +60,13 @@ bun install -g claude-prune
 ## Usage
 
 ```bash
-claude-prune prune <sessionId> --keep <number> [options]
-claude-prune prune <sessionId> --keep-percent <percent> [options]
-claude-prune restore <sessionId> [--dry-run]
+ccprune prune <sessionId> --keep <number> [options]
+ccprune prune <sessionId> --keep-percent <percent> [options]
+ccprune restore <sessionId> [--dry-run]
 
 # Shorthand (prune is default)
-claude-prune <sessionId> --keep <number> [options]
-claude-prune <sessionId> --keep-percent <percent> [options]
+ccprune <sessionId> --keep <number> [options]
+ccprune <sessionId> --keep-percent <percent> [options]
 ```
 
 ### Arguments
@@ -89,22 +91,22 @@ Either `--keep` or `--keep-percent` is required. If both are provided, `--keep` 
 
 ```bash
 # Keep the last 10 assistant messages (auto-generates summary of pruned content)
-npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
+npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
 
 # Keep the latest 25% of assistant messages (prunes older 75%)
-npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep-percent 25
+npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep-percent 25
 
 # Preview what would be pruned (shows summary preview too)
-npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 5 --dry-run
+npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 5 --dry-run
 
 # Skip summarization for faster pruning
-npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10 --no-summary
+npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10 --no-summary
 
 # Use a specific model for summarization (haiku is faster/cheaper)
-npx claude-prune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10 --summary-model haiku
+npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10 --summary-model haiku
 
 # Restore from the latest backup
-npx claude-prune restore 03953bb8-6855-4e53-a987-e11422a03fc6
+npx ccprune restore 03953bb8-6855-4e53-a987-e11422a03fc6
 ```
 
 ## How It Works
@@ -135,23 +137,26 @@ For example, a project at `/Users/alice/my-app` becomes:
 
 ### CLAUDE_CONFIG_DIR
 
-By default, claude-prune looks for session files in `~/.claude`. If Claude Code is configured to use a different directory, you can specify it with the `CLAUDE_CONFIG_DIR` environment variable:
+By default, ccprune looks for session files in `~/.claude`. If Claude Code is configured to use a different directory, you can specify it with the `CLAUDE_CONFIG_DIR` environment variable:
 
 ```bash
-CLAUDE_CONFIG_DIR=/custom/path/to/claude claude-prune <sessionId> --keep 50
+CLAUDE_CONFIG_DIR=/custom/path/to/claude ccprune <sessionId> --keep 50
 ```
 
-## Migrating from v1.x
+## Migrating from claude-prune
 
-v2.0 changes the default behavior: **summarization is now enabled by default**.
+If you were using the original `claude-prune` package, `ccprune` v2.0 has these changes:
 
 ```bash
-# v1.x (summary was opt-in)
+# claude-prune v1.x (summary was opt-in)
 claude-prune <id> -k 10 --summarize-pruned
 
-# v2.0 (summary is default, opt-out with --no-summary)
-claude-prune <id> -k 10              # includes summary
-claude-prune <id> -k 10 --no-summary # skips summary
+# ccprune v2.0 (summary is default, opt-out with --no-summary)
+ccprune <id> -k 10              # includes summary
+ccprune <id> -k 10 --no-summary # skips summary
+
+# New in ccprune: percentage-based pruning
+ccprune <id> --keep-percent 25  # keep latest 25%
 ```
 
 The `--summarize-pruned` flag has been removed. Use `--no-summary` to disable summarization.
@@ -173,6 +178,10 @@ bun run build
 # Test locally
 ./dist/index.js --help
 ```
+
+## Credits
+
+This project is a fork of [claude-prune](https://github.com/DannyAziz/claude-prune) by Danny Aziz. Thanks for the original implementation!
 
 ## License
 

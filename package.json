@@ -1,23 +1,23 @@
 {
-  "name": "claude-prune",
+  "name": "ccprune",
   "version": "2.0.0",
-  "description": "Prune early messages from Claude Code session transcripts",
-  "author": "Danny Aziz",
+  "description": "Prune early messages from Claude Code session transcripts with AI summarization",
+  "author": "Nico Bailon",
   "license": "MIT",
-  "keywords": ["claude", "claude-code", "session", "prune", "jsonl", "cli"],
+  "keywords": ["claude", "claude-code", "session", "prune", "jsonl", "cli", "context", "summarize"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/dannyaziz/cc-prune.git"
+    "url": "https://github.com/nicobailon/claude-prune.git"
   },
-  "homepage": "https://github.com/dannyaziz/cc-prune#readme",
+  "homepage": "https://github.com/nicobailon/claude-prune#readme",
   "bugs": {
-    "url": "https://github.com/dannyaziz/cc-prune/issues"
+    "url": "https://github.com/nicobailon/claude-prune/issues"
   },
   "main": "dist/index.js",
   "module": "dist/index.js",
   "type": "module",
   "bin": {
-    "claude-prune": "./dist/index.js"
+    "ccprune": "./dist/index.js"
   },
   "files": [
     "dist/**/*",
