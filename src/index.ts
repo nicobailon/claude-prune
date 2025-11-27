@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { homedir } from "os";
-import { join, basename } from "path";
+import { join } from "path";
 import fs from "fs-extra";
 import { Command } from "commander";
 import chalk from "chalk";
@@ -17,15 +17,16 @@ export function getClaudeConfigDir(): string {
 const program = new Command()
   .name("claude-prune")
   .description("Prune early messages from a Claude Code session.jsonl file")
-  .version("1.2.0");
+  .version("2.0.0");
 
 program
   .command("prune")
-  .description("Prune early messages from a session, optionally summarizing removed content")
+  .description("Prune early messages from a session (summarizes by default)")
   .argument("<sessionId>", "UUID of the session (without .jsonl)")
   .requiredOption("-k, --keep <number>", "number of *message* objects to keep", parseInt)
-  .option("--dry-run", "show what would happen but don't write")
-  .option("--summarize-pruned", "summarize the pruned messages and prepend it to the chat")
+  .option("--dry-run", "preview changes without writing (still generates summary preview)")
+  .option("--no-summary", "skip AI summarization of pruned messages")
+  .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
   .action(main);
 
 program
@@ -39,9 +40,10 @@ program
 program
   .argument("[sessionId]", "UUID of the session (without .jsonl)")
   .option("-k, --keep <number>", "number of *message* objects to keep", parseInt)
-  .option("--dry-run", "show what would happen but don't write")
-  .option("--summarize-pruned", "summarize the pruned messages and prepend it to the chat")
-  .action((sessionId, opts: { keep?: number; dryRun?: boolean; summarizePruned?: boolean }) => {
+  .option("--dry-run", "preview changes without writing (still generates summary preview)")
+  .option("--no-summary", "skip AI summarization of pruned messages")
+  .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
+  .action((sessionId, opts: { keep?: number; dryRun?: boolean; summary?: boolean; summaryModel?: string }) => {
     if (sessionId && opts.keep) {
       main(sessionId, opts);
     } else {
@@ -70,7 +72,6 @@ export function pruneSessionLines(lines: string[], keepN: number): { outLines: s
     } catch { /* non-JSON diagnostic line – keep as-is */ }
   });
 
-  const total = msgIndexes.length;
   const keepNSafe = Math.max(0, keepN);
   
   // Find the cutoff point based on last N assistant messages
@@ -92,8 +93,7 @@ export function pruneSessionLines(lines: string[], keepN: number): { outLines: s
 
   // HACK: Zero out ONLY the last non-zero cache_read_input_tokens to trick UI percentage
   let lastNonZeroCacheLineIndex = -1;
-  let lastNonZeroCacheValue = 0;
-  
+
   // First pass: find the last non-zero cache line
   lines.forEach((ln, i) => {
     try {
@@ -101,7 +101,6 @@ export function pruneSessionLines(lines: string[], keepN: number): { outLines: s
       const usageObj = obj.usage || obj.message?.usage;
       if (usageObj?.cache_read_input_tokens && usageObj.cache_read_input_tokens > 0) {
         lastNonZeroCacheLineIndex = i;
-        lastNonZeroCacheValue = usageObj.cache_read_input_tokens;
       }
     } catch { /* not JSON, skip */ }
   });
@@ -158,18 +157,24 @@ if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
   program.parse();
 }
 
+// Helper to get message type label
+function getMessageTypeLabel(type: string): string {
+  if (type === 'user') return 'User';
+  if (type === 'system') return 'System';
+  return 'Assistant';
+}
+
 // Extract summarization logic for testing
 export async function generateSummary(
   droppedMessages: { type: string, content: string }[],
-  options: { maxLength?: number } = {}
+  options: { maxLength?: number; model?: string } = {}
 ): Promise<string> {
   const maxLength = options.maxLength || 60000;
-  
+
   let transcriptToSummarize = droppedMessages
-    .map(msg => `${msg.type === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
+    .map(msg => `${getMessageTypeLabel(msg.type)}: ${msg.content}`)
     .join('\n\n');
-  
-  // Guard against shell argument overflow
+
   if (transcriptToSummarize.length > maxLength) {
     console.log(chalk.yellow(`\nTranscript too long (${transcriptToSummarize.length} chars). Truncating to ${maxLength} chars...`));
     const truncated = transcriptToSummarize.substring(0, maxLength);
@@ -178,29 +183,43 @@ export async function generateSummary(
     const cutPoint = Math.max(lastSpace, lastNewline);
     transcriptToSummarize = truncated.substring(0, cutPoint > 0 ? cutPoint : maxLength) + '\n\n... (transcript truncated due to length)';
   }
-  
-  // Use single quotes and escape single quotes inside to avoid shell injection
-  const prompt = `The following is a transcript of a conversation that is about to be pruned from my session. Please provide a very concise, one-paragraph summary of what was discussed and accomplished. Start the summary with "Previously, we discussed...". The summary will be used as a memory for me. Here is the transcript:\n\n${transcriptToSummarize.replace(/'/g, "'\\''")}`;
 
-  const summaryContent = execSync(`claude -p '${prompt}'`, { 
-    encoding: 'utf8',
-    timeout: 30000 // 30 second timeout
-  });
+  const prompt = `The following is a transcript of a conversation that is about to be pruned from my session. Please provide a very concise, one-paragraph summary of what was discussed and accomplished. Start the summary with "Previously, we discussed...". The summary will be used as a memory for me. Here is the transcript:\n\n${transcriptToSummarize}`;
 
-  return summaryContent.trim();
+  const args = ['-p'];
+  if (options.model) {
+    args.push('--model', options.model);
+  }
+
+  try {
+    const summaryContent = execSync(`claude ${args.join(' ')}`, {
+      input: prompt,
+      encoding: 'utf8',
+      timeout: 60000
+    });
+    return summaryContent.trim();
+  } catch (error: any) {
+    if (error.killed || error.signal === 'SIGTERM') {
+      throw new Error('Summary generation timed out. Try with --summary-model haiku for faster results.');
+    }
+    if (error.code === 'ENOENT' || error.message?.includes('not found')) {
+      throw new Error('Claude CLI not found. Make sure Claude Code is installed and the "claude" command is available.');
+    }
+    throw error;
+  }
 }
 
 // ---------- Main ----------
-async function main(sessionId: string, opts: { keep: number; dryRun?: boolean; summarizePruned?: boolean }) {
+async function main(sessionId: string, opts: { keep: number; dryRun?: boolean; summary?: boolean; summaryModel?: string }) {
   const cwdProject = process.cwd().replace(/\//g, '-');
   const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
 
   if (!(await fs.pathExists(file))) {
-    console.error(chalk.red(`❌ No transcript at ${file}`));
+    console.error(chalk.red(`No transcript at ${file}`));
     process.exit(1);
   }
 
-  // Dry-run confirmation via clack if user forgot --dry-run flag
+  // Confirmation via clack if not dry-run
   if (!opts.dryRun && process.stdin.isTTY) {
     const ok = await confirm({ message: chalk.yellow("Overwrite original file?"), initialValue: true });
     if (!ok) process.exit(0);
@@ -211,40 +230,54 @@ async function main(sessionId: string, opts: { keep: number; dryRun?: boolean; s
   const lines = raw.split(/\r?\n/).filter(Boolean);
 
   const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, opts.keep);
+  spinner.succeed(`${chalk.green("Scanned")} ${lines.length} lines (${kept} kept, ${dropped} dropped) - ${assistantCount} assistant messages found`);
 
-  let summaryAdded = false;
-  if (!opts.dryRun && opts.summarizePruned && droppedMessages.length > 0) {
-    spinner.start("Summarizing pruned messages with Claude...");
+  // Summarization is ON by default (opts.summary is undefined or true)
+  // OFF only when explicitly set to false via --no-summary
+  const shouldSummarize = opts.summary !== false && droppedMessages.length > 0;
+
+  let summaryContent: string | null = null;
+  if (shouldSummarize) {
+    const modelInfo = opts.summaryModel ? ` using ${opts.summaryModel}` : '';
+    spinner.start(`Generating summary with Claude${modelInfo}...`);
     try {
-      const summaryContent = await generateSummary(droppedMessages);
-
-      const summaryLine = JSON.stringify({
-        type: "user",
-        isCompactSummary: true,
-        message: { content: summaryContent }
-      });
-
-      // Safely insert after first line if it exists
-      if (outLines.length > 0) {
-        outLines.splice(1, 0, summaryLine);
-      } else {
-        outLines.push(summaryLine);
-      }
-      summaryAdded = true;
-      spinner.succeed("Summarization complete.");
-    } catch (error) {
-      spinner.fail("Failed to summarize messages. Make sure Claude CLI is installed and available.");
-      console.error(chalk.red(error));
+      summaryContent = await generateSummary(droppedMessages, { model: opts.summaryModel });
+      spinner.succeed("Summary generated.");
+    } catch (error: any) {
+      spinner.fail(`Failed to generate summary: ${error.message}`);
+      console.error(chalk.red(error.message));
       process.exit(1);
     }
   }
 
-  const summaryMessage = summaryAdded ? chalk.blue(" (+1 summary)") : "";
-  spinner.succeed(`${chalk.green("Scanned")} ${lines.length} lines (${kept} kept, ${dropped} dropped) - ${assistantCount} assistant messages found${summaryMessage}`);
-
+  // Dry-run: show preview and exit
   if (opts.dryRun) {
-    console.log(chalk.cyan("Dry-run only ➜ no files written."));
+    console.log(chalk.cyan("\nDry-run preview:"));
+    console.log(chalk.dim(`  Would prune ${dropped} messages, keep ${kept}`));
+    if (summaryContent) {
+      console.log(chalk.cyan("\nSummary that would be inserted:"));
+      console.log(chalk.dim("─".repeat(60)));
+      console.log(chalk.white(summaryContent));
+      console.log(chalk.dim("─".repeat(60)));
+      console.log(chalk.dim("(Would be inserted after first line)"));
+    }
+    console.log(chalk.cyan("\nNo files written."));
     return;
+  }
+
+  // Insert summary if generated
+  if (summaryContent) {
+    const summaryLine = JSON.stringify({
+      type: "user",
+      isCompactSummary: true,
+      message: { content: summaryContent }
+    });
+
+    if (outLines.length > 0) {
+      outLines.splice(1, 0, summaryLine);
+    } else {
+      outLines.push(summaryLine);
+    }
   }
 
   const backupDir = join(getClaudeConfigDir(), "projects", cwdProject, "prune-backup");
@@ -253,7 +286,8 @@ async function main(sessionId: string, opts: { keep: number; dryRun?: boolean; s
   await fs.copyFile(file, backup);
   await fs.writeFile(file, outLines.join("\n") + "\n");
 
-  console.log(chalk.bold.green("✅ Done:"), chalk.white(`${file}`));
+  const summaryMsg = summaryContent ? chalk.blue(" (+1 summary)") : "";
+  console.log(chalk.bold.green("Done:"), chalk.white(`${file}${summaryMsg}`));
   console.log(chalk.dim(`Backup at ${backup}`));
 }
 
@@ -278,7 +312,7 @@ async function restore(sessionId: string, opts: { dryRun?: boolean }) {
   const backupDir = join(getClaudeConfigDir(), "projects", cwdProject, "prune-backup");
 
   if (!(await fs.pathExists(backupDir))) {
-    console.error(chalk.red(`❌ No backup directory found at ${backupDir}`));
+    console.error(chalk.red(`No backup directory found at ${backupDir}`));
     process.exit(1);
   }
 
@@ -315,7 +349,7 @@ async function restore(sessionId: string, opts: { dryRun?: boolean }) {
 
     await fs.copyFile(backupPath, file);
     
-    console.log(chalk.bold.green("✅ Restored:"), chalk.white(`${file}`));
+    console.log(chalk.bold.green("Restored:"), chalk.white(`${file}`));
     console.log(chalk.dim(`From backup: ${backupPath}`));
 
   } catch (error) {

@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 CLI tool that prunes Claude Code session transcript files (`.jsonl`) to reduce context usage. Operates on session files at `$CLAUDE_CONFIG_DIR/projects/{project-path-with-hyphens}/{sessionId}.jsonl` (where `$CLAUDE_CONFIG_DIR` defaults to `~/.claude` if not set).
 
+**v2.0**: Summarization is enabled by default. Use `--no-summary` to skip.
+
 ## Essential Commands
 
 ```bash
@@ -17,8 +19,9 @@ bun run test -- --coverage     # Run tests with coverage
 bun run build                  # Build for distribution
 
 # Testing the CLI locally
-bun run src/index.ts prune <sessionId> -k 10              # Test prune command
-bun run src/index.ts prune <sessionId> -k 10 --summarize-pruned  # With AI summary
+bun run src/index.ts prune <sessionId> -k 10              # Prune with summary (default)
+bun run src/index.ts prune <sessionId> -k 10 --no-summary # Skip summary
+bun run src/index.ts prune <sessionId> -k 10 --summary-model haiku  # Use haiku model
 bun run src/index.ts restore <sessionId>                  # Test restore command
 ./dist/index.js --help                                    # Test built CLI
 ```
@@ -35,12 +38,15 @@ All core logic is in `src/index.ts` with functions exported for testing.
 2. Finds assistant message indices, keeps everything from Nth-to-last assistant message forward
 3. Preserves non-message lines (tool results, system diagnostics)
 4. **Cache Token Hack**: Zeros out the last non-zero `cache_read_input_tokens` in `usage` or `message.usage` objects to reduce UI context percentage display
+5. Returns `droppedMessages[]` for summarization
 
-**`generateSummary(droppedMessages)`** - AI summarization (optional `--summarize-pruned` flag):
-- Shells out to `claude -p` CLI with dropped message content
-- Truncates transcript at 60K chars to avoid shell overflow
+**`generateSummary(droppedMessages, options)`** - AI summarization:
+- Formats transcript with proper labels (User/Assistant/System)
+- Truncates at `maxLength` (default 60K chars) to avoid issues
+- Uses stdin to pipe prompt to `claude -p` CLI (no shell escaping needed)
+- Supports `--model` option for model selection (haiku, sonnet, or full name)
 - Returns summary starting with "Previously, we discussed..."
-- Inserts result as `{ type: "user", isCompactSummary: true, message: {...} }` after first line
+- Result inserted as `{ type: "user", isCompactSummary: true, message: {...} }` after first line
 
 **`findLatestBackup(backupFiles, sessionId)`** - Backup discovery:
 - Filters by pattern `{sessionId}.jsonl.{timestamp}`
@@ -51,7 +57,7 @@ All core logic is in `src/index.ts` with functions exported for testing.
 **Backup Strategy**: Creates backups in `prune-backup/` subdirectory as `{sessionId}.jsonl.{timestamp}` before modifications.
 
 **CLI Commands**:
-- `claude-prune prune <sessionId> -k <n> [--summarize-pruned]` - Main pruning
+- `claude-prune prune <sessionId> -k <n> [--no-summary] [--summary-model <model>]` - Main pruning (summary on by default)
 - `claude-prune restore <sessionId>` - Restore from latest backup
 - Backward compat: `claude-prune <sessionId> -k <n>` still works
 
@@ -61,3 +67,4 @@ All core logic is in `src/index.ts` with functions exported for testing.
 - **Safe Parsing**: All JSON parsing wrapped in try/catch for mixed content files
 - **Interactive Confirmation**: Uses `@clack/prompts` unless `--dry-run` specified
 - **Output Format**: JSONL with `\n` line endings
+- **Dry-Run Preview**: Shows summary that would be inserted without writing files

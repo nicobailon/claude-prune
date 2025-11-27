@@ -2,19 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
 
-// Mock child_process
 vi.mock('child_process', () => ({
   execSync: vi.fn()
 }));
 
-// Mock chalk to avoid console output in tests
 vi.mock('chalk', () => ({
   default: {
     yellow: vi.fn((msg: string) => msg)
   }
 }));
 
-// Import after mocks are set up
 import { generateSummary } from './index.js';
 
 describe('generateSummary', () => {
@@ -35,31 +32,34 @@ describe('generateSummary', () => {
 
     expect(result).toBe(mockSummary);
     expect(execSync).toHaveBeenCalledWith(
-      expect.stringContaining('claude -p'),
+      'claude -p',
       expect.objectContaining({
         encoding: 'utf8',
-        timeout: 30000
+        timeout: 60000,
+        input: expect.stringContaining('How do I write tests?')
       })
     );
   });
 
-  it('should format transcript correctly', async () => {
+  it('should format transcript correctly with proper labels', async () => {
     vi.mocked(execSync).mockReturnValue('Summary content\n');
 
     const droppedMessages = [
       { type: 'user', content: 'Question 1' },
       { type: 'assistant', content: 'Answer 1' },
+      { type: 'system', content: 'System message' },
       { type: 'user', content: 'Question 2' }
     ];
 
     await generateSummary(droppedMessages);
 
     const call = vi.mocked(execSync).mock.calls[0];
-    const command = call[0] as string;
-    
-    expect(command).toContain('User: Question 1');
-    expect(command).toContain('Assistant: Answer 1');
-    expect(command).toContain('User: Question 2');
+    const options = call[1] as { input: string };
+
+    expect(options.input).toContain('User: Question 1');
+    expect(options.input).toContain('Assistant: Answer 1');
+    expect(options.input).toContain('System: System message');
+    expect(options.input).toContain('User: Question 2');
   });
 
   it('should truncate long transcripts', async () => {
@@ -76,13 +76,13 @@ describe('generateSummary', () => {
     await generateSummary(droppedMessages, { maxLength: 60000 });
 
     const call = vi.mocked(execSync).mock.calls[0];
-    const command = call[0] as string;
-    
-    expect(command).toContain('... (transcript truncated due to length)');
+    const options = call[1] as { input: string };
+
+    expect(options.input).toContain('... (transcript truncated due to length)');
     expect(chalk.yellow).toHaveBeenCalledWith(expect.stringContaining('Transcript too long'));
   });
 
-  it('should escape single quotes in content', async () => {
+  it('should pass single quotes without escaping (using stdin)', async () => {
     vi.mocked(execSync).mockReturnValue('Summary\n');
 
     const droppedMessages = [
@@ -93,11 +93,10 @@ describe('generateSummary', () => {
     await generateSummary(droppedMessages);
 
     const call = vi.mocked(execSync).mock.calls[0];
-    const command = call[0] as string;
-    
-    // Check that single quotes are properly escaped
-    expect(command).toContain("What'\\''s the user'\\''s name?");
-    expect(command).toContain("The user'\\''s name is '\\''John'\\''.");
+    const options = call[1] as { input: string };
+
+    expect(options.input).toContain("What's the user's name?");
+    expect(options.input).toContain("The user's name is 'John'.");
   });
 
   it('should include the correct prompt instructions', async () => {
@@ -106,11 +105,11 @@ describe('generateSummary', () => {
     await generateSummary([{ type: 'user', content: 'test' }]);
 
     const call = vi.mocked(execSync).mock.calls[0];
-    const command = call[0] as string;
-    
-    expect(command).toContain('provide a very concise, one-paragraph summary');
-    expect(command).toContain('Start the summary with "Previously, we discussed..."');
-    expect(command).toContain('The summary will be used as a memory');
+    const options = call[1] as { input: string };
+
+    expect(options.input).toContain('provide a very concise, one-paragraph summary');
+    expect(options.input).toContain('Start the summary with "Previously, we discussed..."');
+    expect(options.input).toContain('The summary will be used as a memory');
   });
 
   it('should handle empty messages array', async () => {
@@ -130,14 +129,26 @@ describe('generateSummary', () => {
     expect(result).toBe('Summary with spaces');
   });
 
-  it('should throw error when execSync fails', async () => {
+  it('should throw error with helpful message when CLI not found', async () => {
     const error = new Error('Command not found: claude');
+    (error as any).code = 'ENOENT';
     vi.mocked(execSync).mockImplementation(() => {
       throw error;
     });
 
     await expect(generateSummary([{ type: 'user', content: 'test' }]))
-      .rejects.toThrow('Command not found: claude');
+      .rejects.toThrow('Claude CLI not found');
+  });
+
+  it('should throw error with helpful message on timeout', async () => {
+    const error = new Error('Process timed out');
+    (error as any).killed = true;
+    vi.mocked(execSync).mockImplementation(() => {
+      throw error;
+    });
+
+    await expect(generateSummary([{ type: 'user', content: 'test' }]))
+      .rejects.toThrow('Summary generation timed out');
   });
 
   it('should respect custom maxLength option', async () => {
@@ -152,9 +163,31 @@ describe('generateSummary', () => {
     await generateSummary(droppedMessages, { maxLength: 10000 });
 
     const call = vi.mocked(execSync).mock.calls[0];
-    const command = call[0] as string;
-    
-    expect(command).toContain('... (transcript truncated due to length)');
+    const options = call[1] as { input: string };
+
+    expect(options.input).toContain('... (transcript truncated due to length)');
     expect(chalk.yellow).toHaveBeenCalledWith(expect.stringContaining('Truncating to 10000 chars'));
+  });
+
+  it('should pass model option to claude CLI', async () => {
+    vi.mocked(execSync).mockReturnValue('Summary\n');
+
+    await generateSummary([{ type: 'user', content: 'test' }], { model: 'haiku' });
+
+    expect(execSync).toHaveBeenCalledWith(
+      'claude -p --model haiku',
+      expect.any(Object)
+    );
+  });
+
+  it('should not include model flag when model not specified', async () => {
+    vi.mocked(execSync).mockReturnValue('Summary\n');
+
+    await generateSummary([{ type: 'user', content: 'test' }]);
+
+    expect(execSync).toHaveBeenCalledWith(
+      'claude -p',
+      expect.any(Object)
+    );
   });
 });
