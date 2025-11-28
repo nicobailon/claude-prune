@@ -162,7 +162,11 @@ program
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
   .option("--summary-timeout <ms>", "max total time for summarization in ms (default: 360000)", parseInt)
-  .action(pruneCommand);
+  .option("--gemini", "use Gemini 3 Pro for summarization (requires GEMINI_API_KEY)")
+  .option("--gemini-flash", "use Gemini 2.5 Flash for summarization (requires GEMINI_API_KEY)")
+  .action(function(sessionId) {
+    return pruneCommand(sessionId, this.opts());
+  });
 
 program
   .command("restore")
@@ -182,7 +186,11 @@ program
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
   .option("--summary-timeout <ms>", "max total time for summarization in ms (default: 360000)", parseInt)
-  .action(pruneCommand);
+  .option("--gemini", "use Gemini 3 Pro for summarization (requires GEMINI_API_KEY)")
+  .option("--gemini-flash", "use Gemini 2.5 Flash for summarization (requires GEMINI_API_KEY)")
+  .action(function(sessionId) {
+    return pruneCommand(sessionId, this.opts());
+  });
 
 // Count assistant messages (for percentage calculation)
 export function countAssistantMessages(lines: string[]): number {
@@ -470,10 +478,65 @@ ${combined}`;
   return result.trim();
 }
 
+async function generateSummaryWithGemini(
+  prompt: string,
+  options: { useFlash?: boolean; onProgress?: () => void }
+): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY environment variable is required when using --gemini');
+  }
+
+  const model = options.useFlash ? 'gemini-2.5-flash' : 'gemini-3-pro-preview';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+  const progressInterval = options.onProgress
+    ? setInterval(options.onProgress, 500)
+    : null;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 8192
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Gemini API error (${response.status}): ${error}`);
+    }
+
+    const data = await response.json() as {
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{ text?: string }>;
+        };
+      }>;
+    };
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!text) {
+      throw new Error('Gemini API returned empty response');
+    }
+
+    return text.trim();
+  } finally {
+    if (progressInterval) {
+      clearInterval(progressInterval);
+    }
+  }
+}
+
 // Extract summarization logic for testing
 export async function generateSummary(
   droppedMessages: { type: string, content: string, isSummary?: boolean }[],
-  options: { maxLength?: number; model?: string; timeout?: number; onProgress?: () => void } = {}
+  options: { maxLength?: number; model?: string; timeout?: number; onProgress?: () => void; useGemini?: boolean; useGeminiFlash?: boolean } = {}
 ): Promise<string> {
   const maxLength = options.maxLength || MAX_SINGLE_PASS;
 
@@ -490,8 +553,8 @@ export async function generateSummary(
     .map(msg => `${getMessageTypeLabel(msg.type)}: ${msg.content}`)
     .join('\n\n');
 
-  // For very large transcripts, use chunked summarization
-  if (transcriptToSummarize.length > maxLength) {
+  // For very large transcripts, use chunked summarization (Claude only - Gemini handles large context)
+  if (!options.useGemini && transcriptToSummarize.length > maxLength) {
     console.log(chalk.yellow(`\nTranscript very large (${Math.round(transcriptToSummarize.length / 1024)}KB). Summarizing in chunks...`));
 
     const chunkSize = Math.min(CHUNK_SIZE, maxLength);
@@ -570,6 +633,14 @@ Here is the transcript to summarize:
 ${transcriptToSummarize}`;
   }
 
+  // Use Gemini API if requested - no chunking needed
+  if (options.useGemini) {
+    return await generateSummaryWithGemini(prompt, {
+      useFlash: options.useGeminiFlash,
+      onProgress: options.onProgress
+    });
+  }
+
   const args = ['-p'];
   if (options.model) {
     args.push('--model', options.model);
@@ -585,8 +656,20 @@ ${transcriptToSummarize}`;
 // ---------- Prune Command Wrapper ----------
 async function pruneCommand(
   sessionId: string | undefined,
-  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number }
+  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean }
 ) {
+  // --gemini-flash implies --gemini
+  if (opts.geminiFlash) {
+    opts.gemini = true;
+  }
+
+  // Validate Gemini options early
+  if (opts.gemini && !process.env.GEMINI_API_KEY) {
+    console.error(chalk.red('Error: GEMINI_API_KEY environment variable is required when using --gemini'));
+    console.error(chalk.dim('Set it in your shell or .env file: export GEMINI_API_KEY=your_key'));
+    process.exit(1);
+  }
+
   const projectDir = getProjectDir();
 
   if (opts.pick) {
@@ -631,7 +714,7 @@ async function pruneCommand(
 }
 
 // ---------- Main ----------
-async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; activityTimeout?: number }) {
+async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean }) {
   const cwdProject = process.cwd().replace(/\//g, '-');
   const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
 
@@ -713,7 +796,9 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
 
     const progress = createSummaryProgress({
       transcriptKB: transcriptSize,
-      model: opts.summaryModel
+      model: opts.summaryModel,
+      useGemini: opts.gemini,
+      useGeminiFlash: opts.geminiFlash
     });
 
     progress.start();
@@ -727,7 +812,9 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
         summaryContent = await generateSummary(droppedMessages, {
           model: opts.summaryModel,
           timeout: opts.summaryTimeout,
-          onProgress: () => progress.update()
+          onProgress: () => progress.update(),
+          useGemini: opts.gemini,
+          useGeminiFlash: opts.geminiFlash
         });
         summaryDurationSec = Math.floor((Date.now() - summaryStartTime) / 1000);
         summaryGenerated = true;
@@ -882,9 +969,9 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
       hasSummary: summaryGenerated || (summaryContent !== null)
     }));
 
-    // Pause for 5 seconds if we're going to resume
+    // Pause for 10 seconds if we're going to resume
     if (opts.resume !== false) {
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await new Promise(resolve => setTimeout(resolve, 10000));
     }
   }
 

@@ -84,6 +84,8 @@ ccprune restore <sessionId> [--dry-run]
 | `--no-summary` | Skip AI summarization of pruned messages |
 | `--summary-model <model>` | Model for summarization (haiku, sonnet, or full name) |
 | `--summary-timeout <ms>` | Timeout for summarization in milliseconds (default: 360000) |
+| `--gemini` | Use Gemini API for summarization (requires `GEMINI_API_KEY`) |
+| `--gemini-flash` | Use Gemini 2.5 Flash instead of Gemini 3 Pro (only with `--gemini`) |
 | `-h, --help` | Show help information |
 | `-V, --version` | Show version number |
 
@@ -116,6 +118,12 @@ npx ccprune --keep 10 --no-summary
 # Use haiku model for summarization (faster/cheaper)
 npx ccprune --summary-model haiku
 
+# Use Gemini API for summarization (no chunking, handles large contexts)
+npx ccprune --gemini
+
+# Use Gemini 2.5 Flash for faster summarization
+npx ccprune --gemini --gemini-flash
+
 # Target a specific session by ID
 npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
 
@@ -130,10 +138,11 @@ npx ccprune restore 03953bb8-6855-4e53-a987-e11422a03fc6
 3. **Smart Pruning**: Finds the Nth-to-last assistant message and keeps everything from that point forward
 4. **AI Summarization**: Generates a structured summary of pruned content (files modified, accomplishments, pending work, key technical details)
 5. **Summary Synthesis**: When re-pruning a session that already has a summary, synthesizes the old summary + newly pruned messages into one cohesive summary
-6. **Chunked Summarization**: For very large transcripts (>100KB), automatically chunks and summarizes in parts, then combines into a single summary
-7. **Preserves Context**: Keeps all non-message lines (tool results, file-history-snapshots)
-8. **Safe Backup**: Creates backup in `prune-backup/` before modifying
-9. **Process Management**: Graceful cleanup on Ctrl+C, activity timeout detection (90s), and automatic retry on failures
+6. **Chunked Summarization**: For very large transcripts (>30KB with Claude), automatically chunks and summarizes in parts, then combines into a single summary
+7. **Gemini Integration**: Optional `--gemini` flag uses Gemini API for summarization (handles large contexts without chunking)
+8. **Preserves Context**: Keeps all non-message lines (tool results, file-history-snapshots)
+9. **Safe Backup**: Creates backup in `prune-backup/` before modifying
+10. **Process Management**: Graceful cleanup on Ctrl+C and automatic retry on failures
 
 ## File Structure
 
@@ -157,6 +166,15 @@ By default, ccprune looks for session files in `~/.claude`. If Claude Code is co
 
 ```bash
 CLAUDE_CONFIG_DIR=/custom/path/to/claude ccprune <sessionId> --keep 50
+```
+
+### GEMINI_API_KEY
+
+Required when using the `--gemini` flag. Get your API key from [Google AI Studio](https://aistudio.google.com/apikey).
+
+```bash
+export GEMINI_API_KEY=your_api_key_here
+ccprune --gemini
 ```
 
 ## Migrating from claude-prune

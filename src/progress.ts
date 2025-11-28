@@ -4,17 +4,24 @@ import chalk from 'chalk';
 export interface ProgressOptions {
   transcriptKB: number;
   model?: string;
+  useGemini?: boolean;
+  useGeminiFlash?: boolean;
 }
 
 export function createSummaryProgress(options: ProgressOptions) {
-  const { transcriptKB, model } = options;
+  const { transcriptKB, model, useGemini, useGeminiFlash } = options;
 
   const isHaiku = model?.toLowerCase().includes('haiku') ?? false;
-  const modelMultiplier = isHaiku ? 0.33 : 1;
-  let estimatedSeconds = Math.max(30, Math.ceil(transcriptKB * 2 * modelMultiplier));
+  const isGemini = useGemini ?? false;
+  const modelMultiplier = isGemini ? 0.5 : (isHaiku ? 0.33 : 1);
+  let estimatedSeconds = Math.max(15, Math.ceil(transcriptKB * 2 * modelMultiplier));
+
+  const provider = isGemini
+    ? (useGeminiFlash ? 'Gemini 2.5 Flash' : 'Gemini 3 Pro')
+    : 'Claude';
 
   const bar = new cliProgress.SingleBar({
-    format: `Generating summary | ${chalk.cyan('{bar}')} | {percentage}% | {elapsed}s / ~{estimate}s`,
+    format: `Generating summary (${provider}) | ${chalk.cyan('{bar}')} | {percentage}% | {elapsed}s / ~{estimate}s`,
     barCompleteChar: '\u2588',
     barIncompleteChar: '\u2591',
     hideCursor: true,
