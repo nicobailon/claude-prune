@@ -860,9 +860,10 @@ describe('listSessions', () => {
   });
 
   it('should find UUID sessions and ignore agent sessions', async () => {
-    await fs.writeFile(join(testDir, '03953bb8-6855-4e53-a987-e11422a03fc6.jsonl'), 'test');
-    await fs.writeFile(join(testDir, 'agent-b37f4f2f.jsonl'), 'test');
-    await fs.writeFile(join(testDir, 'other.txt'), 'test');
+    const conversationContent = '{"type":"user","message":{"content":"hello"}}';
+    await fs.writeFile(join(testDir, '03953bb8-6855-4e53-a987-e11422a03fc6.jsonl'), conversationContent);
+    await fs.writeFile(join(testDir, 'agent-b37f4f2f.jsonl'), conversationContent);
+    await fs.writeFile(join(testDir, 'other.txt'), conversationContent);
 
     const sessions = await listSessions(testDir);
     expect(sessions).toHaveLength(1);
@@ -872,10 +873,11 @@ describe('listSessions', () => {
   it('should sort sessions by modification time (newest first)', async () => {
     const id1 = '03953bb8-6855-4e53-a987-e11422a03fc6';
     const id2 = '12345678-1234-1234-1234-123456789012';
+    const conversationContent = '{"type":"user","message":{"content":"hello"}}';
 
-    await fs.writeFile(join(testDir, `${id1}.jsonl`), 'older');
+    await fs.writeFile(join(testDir, `${id1}.jsonl`), conversationContent);
     await new Promise(r => setTimeout(r, 50));
-    await fs.writeFile(join(testDir, `${id2}.jsonl`), 'newer');
+    await fs.writeFile(join(testDir, `${id2}.jsonl`), conversationContent);
 
     const sessions = await listSessions(testDir);
     expect(sessions).toHaveLength(2);
@@ -884,12 +886,33 @@ describe('listSessions', () => {
   });
 
   it('should include size and modification time', async () => {
-    const content = 'x'.repeat(2048);
+    const content = '{"type":"user","message":{"content":"' + 'x'.repeat(2048) + '"}}';
     await fs.writeFile(join(testDir, '03953bb8-6855-4e53-a987-e11422a03fc6.jsonl'), content);
 
     const sessions = await listSessions(testDir);
     expect(sessions[0].sizeKB).toBe(2);
     expect(sessions[0].modifiedAt).toBeInstanceOf(Date);
+  });
+
+  it('should skip sessions without conversation messages (only file-history-snapshot)', async () => {
+    const emptySession = '{"type":"file-history-snapshot","messageId":"abc"}\n{"type":"file-history-snapshot","messageId":"def"}';
+    const realSession = '{"type":"file-history-snapshot","messageId":"ghi"}\n{"type":"user","message":{"content":"hello"}}';
+
+    await fs.writeFile(join(testDir, '11111111-1111-1111-1111-111111111111.jsonl'), emptySession);
+    await new Promise(r => setTimeout(r, 50));
+    await fs.writeFile(join(testDir, '22222222-2222-2222-2222-222222222222.jsonl'), realSession);
+
+    const sessions = await listSessions(testDir);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].id).toBe('22222222-2222-2222-2222-222222222222');
+  });
+
+  it('should include sessions with only assistant messages', async () => {
+    const assistantOnly = '{"type":"assistant","message":{"content":"I can help with that"}}';
+    await fs.writeFile(join(testDir, '03953bb8-6855-4e53-a987-e11422a03fc6.jsonl'), assistantOnly);
+
+    const sessions = await listSessions(testDir);
+    expect(sessions).toHaveLength(1);
   });
 });
 
@@ -912,14 +935,31 @@ describe('findLatestSession', () => {
   it('should return the most recent session', async () => {
     const id1 = '03953bb8-6855-4e53-a987-e11422a03fc6';
     const id2 = '12345678-1234-1234-1234-123456789012';
+    const conversationContent = '{"type":"user","message":{"content":"hello"}}';
 
-    await fs.writeFile(join(testDir, `${id1}.jsonl`), 'older');
+    await fs.writeFile(join(testDir, `${id1}.jsonl`), conversationContent);
     await new Promise(r => setTimeout(r, 50));
-    await fs.writeFile(join(testDir, `${id2}.jsonl`), 'newer');
+    await fs.writeFile(join(testDir, `${id2}.jsonl`), conversationContent);
 
     const result = await findLatestSession(testDir);
     expect(result).not.toBeNull();
     expect(result!.id).toBe(id2);
+  });
+
+  it('should skip empty sessions and return the most recent with conversation', async () => {
+    const emptyContent = '{"type":"file-history-snapshot","messageId":"abc"}';
+    const realContent = '{"type":"user","message":{"content":"hello"}}';
+
+    const idOlder = '11111111-1111-1111-1111-111111111111';
+    const idNewer = '22222222-2222-2222-2222-222222222222';
+
+    await fs.writeFile(join(testDir, `${idOlder}.jsonl`), realContent);
+    await new Promise(r => setTimeout(r, 50));
+    await fs.writeFile(join(testDir, `${idNewer}.jsonl`), emptyContent);
+
+    const result = await findLatestSession(testDir);
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe(idOlder);
   });
 });
 

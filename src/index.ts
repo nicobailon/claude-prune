@@ -86,13 +86,23 @@ export async function listSessions(projectDir: string): Promise<SessionInfo[]> {
     if (!UUID_PATTERN.test(id)) continue;
 
     const filePath = join(projectDir, file);
-    const stat = await fs.stat(filePath);
-    sessions.push({
-      id,
-      path: filePath,
-      modifiedAt: stat.mtime,
-      sizeKB: Math.round(stat.size / 1024)
-    });
+
+    try {
+      const content = await fs.readFile(filePath, 'utf8');
+      const hasConversation = content.includes('"type":"user"') ||
+                              content.includes('"type":"assistant"');
+      if (!hasConversation) continue;
+
+      const stat = await fs.stat(filePath);
+      sessions.push({
+        id,
+        path: filePath,
+        modifiedAt: stat.mtime,
+        sizeKB: Math.round(stat.size / 1024)
+      });
+    } catch {
+      continue;
+    }
   }
 
   return sessions.sort((a, b) => b.modifiedAt.getTime() - a.modifiedAt.getTime());
@@ -629,10 +639,11 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
       } catch { /* not JSON */ }
     }
 
-    // Extract context from first real message (skip file-history-snapshot if present)
+    // Extract context and timestamp from first real message (skip file-history-snapshot if present)
     let sessionContext = { sessionId: '', cwd: '', slug: '', gitBranch: '', version: '2.0.53' };
+    let firstMessageTimestamp: string | null = null;
 
-    for (let i = 1; i < outLines.length && i < 10; i++) {
+    for (let i = 1; i < outLines.length; i++) {
       try {
         const parsed = JSON.parse(outLines[i]);
         if (parsed.type === 'user' || parsed.type === 'assistant') {
@@ -643,9 +654,19 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
             gitBranch: parsed.gitBranch || '',
             version: parsed.version || '2.0.53'
           };
+          firstMessageTimestamp = parsed.timestamp || null;
           break;
         }
       } catch { /* not JSON */ }
+    }
+
+    // Use timestamp slightly before first kept message so summary appears first chronologically
+    let summaryTimestamp = new Date().toISOString();
+    if (firstMessageTimestamp) {
+      const firstMsgTime = new Date(firstMessageTimestamp);
+      if (!isNaN(firstMsgTime.getTime())) {
+        summaryTimestamp = new Date(firstMsgTime.getTime() - 1).toISOString();
+      }
     }
 
     const summaryLine = JSON.stringify({
@@ -653,7 +674,7 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
       isCompactSummary: true,
       message: { role: "user", content: summaryContent },
       uuid: generateUUID(),
-      timestamp: new Date().toISOString(),
+      timestamp: summaryTimestamp,
       parentUuid: null,
       sessionId: sessionContext.sessionId,
       cwd: sessionContext.cwd,
