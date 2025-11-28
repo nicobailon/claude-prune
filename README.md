@@ -6,10 +6,11 @@ Next time your Claude Code context is running low, just quit cc then run `npx cc
 
 ## Features
 
-- **Zero-Config Default**: Just run `ccprune <sessionId>` - defaults to keeping 20% of messages
+- **Zero-Config Default**: Just run `ccprune` - auto-detects latest session, keeps 20% of messages
 - **Smart Pruning**: Keep messages by count (`--keep 10`) or percentage (`--keep-percent 25`)
 - **AI Summarization**: Automatically generates a summary of pruned content (enabled by default)
 - **Summary Synthesis**: Re-pruning synthesizes old summary + new pruned content into one cohesive summary
+- **Small Session Warning**: Prompts for confirmation when auto-selecting sessions with < 5 messages
 - **Safe by Default**: Always preserves session summaries and metadata
 - **Auto Backup**: Creates timestamped backups before modifying files
 - **Restore Support**: Easily restore from backups with the `restore` command
@@ -84,8 +85,8 @@ ccprune restore <sessionId> [--dry-run]
 | `--no-summary` | Skip AI summarization of pruned messages |
 | `--summary-model <model>` | Model for summarization (haiku, sonnet, or full name) |
 | `--summary-timeout <ms>` | Timeout for summarization in milliseconds (default: 360000) |
-| `--gemini` | Use Gemini API for summarization (requires `GEMINI_API_KEY`) |
-| `--gemini-flash` | Use Gemini 2.5 Flash instead of Gemini 3 Pro (only with `--gemini`) |
+| `--gemini` | Use Gemini 3 Pro for summarization (requires `GEMINI_API_KEY`) |
+| `--gemini-flash` | Use Gemini 2.5 Flash for summarization (requires `GEMINI_API_KEY`) |
 | `-h, --help` | Show help information |
 | `-V, --version` | Show version number |
 
