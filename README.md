@@ -1,6 +1,6 @@
 # ccprune
 
-A fast CLI tool for pruning Claude Code sessions with AI-powered summarization.
+Next time your Claude Code context is running low, just quit cc then run `npx ccprune` - it auto-resumes you back into your last thread, now compacted with an intelligent rolling summary. Run it again when you're low again - the summaries stack, so context just keeps rolling forward.
 
 > Fork of [claude-prune](https://github.com/DannyAziz/claude-prune) with enhanced features: percentage-based pruning, AI summarization enabled by default, and improved UX.
 
