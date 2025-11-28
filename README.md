@@ -39,29 +39,22 @@ bun install -g ccprune
 
 ## Quick Start
 
-**Step-by-step workflow:**
-
-1. **In Claude Code**, run `/status` to find your Session ID:
+1. **Find your Session ID** - In Claude Code, run `/status`:
    ```
    Session ID: 03953bb8-6855-4e53-a987-e11422a03fc6
    ```
 
-2. **Quit Claude Code** (Ctrl+C or type `/quit`)
+2. **Quit Claude Code** - Press `Ctrl+C` or type `/quit`
 
 3. **Run prune** from the same project directory:
    ```bash
-   # Simplest: just the session ID (keeps 20% of messages by default)
    npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6
-
-   # Or specify how much to keep
-   npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
    ```
 
-4. **Resume Claude Code** and select your session:
+4. **Resume your session**:
    ```bash
-   claude --resume
+   claude --resume 03953bb8-6855-4e53-a987-e11422a03fc6
    ```
-   Use arrow keys to find your pruned session in the list.
 
 ## Usage
 
