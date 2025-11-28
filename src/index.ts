@@ -458,6 +458,22 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
   const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, keepN);
   console.log(chalk.dim(`Keeping ${keepN} assistant messages${percentInfo} (${kept} lines kept, ${dropped} dropped)`));
 
+  // Check if there's an existing summary in the KEPT portion that needs synthesis
+  // This happens when the old summary is near the end and falls within the kept range
+  const existingSummaryInDropped = droppedMessages.find(m => m.isSummary);
+  if (!existingSummaryInDropped) {
+    for (let i = 1; i < outLines.length; i++) {
+      try {
+        const parsed = JSON.parse(outLines[i]);
+        if (parsed.isCompactSummary === true && parsed.message?.content) {
+          const keptSummaryContent = extractMessageContent(parsed.message.content);
+          droppedMessages.unshift({ type: 'user', content: keptSummaryContent, isSummary: true });
+          break;
+        }
+      } catch { /* not JSON */ }
+    }
+  }
+
   // Summarization is ON by default (opts.summary is undefined or true)
   // OFF only when explicitly set to false via --no-summary
   const shouldSummarize = opts.summary !== false && droppedMessages.length > 0;
@@ -493,9 +509,9 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
   }
 
   // When --no-summary but existing summary was dropped, preserve it
-  const existingSummaryInDropped = droppedMessages.find(m => m.isSummary);
-  if (!shouldSummarize && existingSummaryInDropped) {
-    summaryContent = existingSummaryInDropped.content;
+  const summaryInDropped = droppedMessages.find(m => m.isSummary);
+  if (!shouldSummarize && summaryInDropped) {
+    summaryContent = summaryInDropped.content;
   }
 
   // Dry-run: show preview and exit

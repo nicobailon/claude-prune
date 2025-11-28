@@ -523,6 +523,67 @@ describe('summarization behavior', () => {
   });
 });
 
+describe('summary in kept portion extraction', () => {
+  it('should extract summary from kept lines when not in dropped', () => {
+    const oldSummary = JSON.stringify({
+      type: "user",
+      isCompactSummary: true,
+      message: { content: "Old summary content" }
+    });
+    const outLines = [
+      'header',
+      '{"type":"user","message":{"content":"msg1"}}',
+      '{"type":"assistant","message":{"content":"msg2"}}',
+      oldSummary,
+      '{"type":"user","message":{"content":"new msg"}}',
+      '{"type":"assistant","message":{"content":"new response"}}',
+    ];
+    const droppedMessages: { type: string, content: string, isSummary?: boolean }[] = [
+      { type: 'user', content: 'dropped msg', isSummary: false }
+    ];
+
+    const existingSummaryInDropped = droppedMessages.find(m => m.isSummary);
+    if (!existingSummaryInDropped) {
+      for (let i = 1; i < outLines.length; i++) {
+        try {
+          const parsed = JSON.parse(outLines[i]);
+          if (parsed.isCompactSummary === true && parsed.message?.content) {
+            droppedMessages.unshift({ type: 'user', content: parsed.message.content, isSummary: true });
+            break;
+          }
+        } catch { /* not JSON */ }
+      }
+    }
+
+    expect(droppedMessages).toHaveLength(2);
+    expect(droppedMessages[0]).toEqual({ type: 'user', content: 'Old summary content', isSummary: true });
+  });
+
+  it('should not extract summary if already in dropped messages', () => {
+    const droppedMessages: { type: string, content: string, isSummary?: boolean }[] = [
+      { type: 'user', content: 'Dropped summary', isSummary: true },
+      { type: 'user', content: 'dropped msg', isSummary: false }
+    ];
+    const outLines = ['header', '{"type":"user","message":{"content":"msg1"}}'];
+
+    const existingSummaryInDropped = droppedMessages.find(m => m.isSummary);
+    if (!existingSummaryInDropped) {
+      for (let i = 1; i < outLines.length; i++) {
+        try {
+          const parsed = JSON.parse(outLines[i]);
+          if (parsed.isCompactSummary === true && parsed.message?.content) {
+            droppedMessages.unshift({ type: 'user', content: parsed.message.content, isSummary: true });
+            break;
+          }
+        } catch { /* not JSON */ }
+      }
+    }
+
+    expect(droppedMessages).toHaveLength(2);
+    expect(droppedMessages[0].content).toBe('Dropped summary');
+  });
+});
+
 describe('isSummary flag detection', () => {
   it('should set isSummary: true for isCompactSummary messages when dropped', () => {
     const lines = [
