@@ -170,6 +170,7 @@ program
   .option("--summary-timeout <ms>", "max total time for summarization in ms (default: 360000)", parseInt)
   .option("--gemini", "use Gemini 3 Pro for summarization (requires GEMINI_API_KEY)")
   .option("--gemini-flash", "use Gemini 2.5 Flash for summarization (requires GEMINI_API_KEY)")
+  .option("--claude-code", "use Claude Code CLI for summarization (chunks large transcripts)")
   .action(function(sessionId) {
     return pruneCommand(sessionId, this.opts());
   });
@@ -659,17 +660,27 @@ ${transcriptToSummarize}`;
 // ---------- Prune Command Wrapper ----------
 async function pruneCommand(
   sessionId: string | undefined,
-  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean }
+  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; claudeCode?: boolean }
 ) {
+  // Auto-detect GEMINI_API_KEY and default to Gemini Flash
+  // Priority: --claude-code > --gemini > --gemini-flash > auto-detect > fallback to Claude Code
+  if (!opts.claudeCode && !opts.gemini && !opts.geminiFlash) {
+    if (process.env.GEMINI_API_KEY) {
+      opts.gemini = true;
+      opts.geminiFlash = true;
+    }
+  }
+
   // --gemini-flash implies --gemini
   if (opts.geminiFlash) {
     opts.gemini = true;
   }
 
-  // Validate Gemini options early
-  if (opts.gemini && !process.env.GEMINI_API_KEY) {
-    console.error(chalk.red('Error: GEMINI_API_KEY environment variable is required when using --gemini'));
-    console.error(chalk.dim('Set it in your shell or .env file: export GEMINI_API_KEY=your_key'));
+  // Validate Gemini (only error if explicitly requested without key)
+  if (opts.gemini && !opts.claudeCode && !process.env.GEMINI_API_KEY) {
+    console.error(chalk.red('Error: GEMINI_API_KEY environment variable is required for --gemini/--gemini-flash'));
+    console.error(chalk.dim('Set it: export GEMINI_API_KEY=your_key'));
+    console.error(chalk.dim('Or use --claude-code for Claude Code CLI'));
     process.exit(1);
   }
 

@@ -49,6 +49,19 @@ bun install -g ccprune
 
 That's it! ccprune auto-detects your latest session, prunes old messages (keeping a summary), and resumes automatically.
 
+## Setup (Recommended)
+
+For fast, high-quality summarization, set up a Gemini API key:
+
+1. Get a free key from [Google AI Studio](https://aistudio.google.com/apikey)
+2. Add to your shell profile (~/.zshrc or ~/.bashrc):
+   ```bash
+   export GEMINI_API_KEY=your_key
+   ```
+3. Restart your terminal or run `source ~/.zshrc`
+
+With `GEMINI_API_KEY` set, ccprune automatically uses Gemini 2.5 Flash for fast summarization without chunking.
+
 ## Usage
 
 ```bash
@@ -85,12 +98,17 @@ ccprune restore <sessionId> [--dry-run]
 | `--no-summary` | Skip AI summarization of pruned messages |
 | `--summary-model <model>` | Model for summarization (haiku, sonnet, or full name) |
 | `--summary-timeout <ms>` | Timeout for summarization in milliseconds (default: 360000) |
-| `--gemini` | Use Gemini 3 Pro for summarization (requires `GEMINI_API_KEY`) |
-| `--gemini-flash` | Use Gemini 2.5 Flash for summarization (requires `GEMINI_API_KEY`) |
+| `--gemini` | Use Gemini 3 Pro for summarization |
+| `--gemini-flash` | Use Gemini 2.5 Flash for summarization |
+| `--claude-code` | Use Claude Code CLI for summarization (chunks large transcripts) |
 | `-h, --help` | Show help information |
 | `-V, --version` | Show version number |
 
 If no session ID is provided, auto-detects the most recently modified session. If no keep option is specified, defaults to `--keep-percent 20`.
+
+**Default summarization:**
+- With `GEMINI_API_KEY` set: Gemini 2.5 Flash (fast, no chunking)
+- Without API key: Claude Code CLI (with chunking for large transcripts)
 
 ### Examples
 
@@ -116,14 +134,17 @@ npx ccprune --dry-run
 # Skip summarization for faster pruning
 npx ccprune --keep 10 --no-summary
 
-# Use haiku model for summarization (faster/cheaper)
-npx ccprune --summary-model haiku
+# Use Claude Code CLI with haiku model (faster/cheaper)
+npx ccprune --claude-code --summary-model haiku
 
-# Use Gemini API for summarization (no chunking, handles large contexts)
+# Use Gemini 3 Pro for summarization
 npx ccprune --gemini
 
-# Use Gemini 2.5 Flash for faster summarization
+# Use Gemini 2.5 Flash (default when GEMINI_API_KEY is set)
 npx ccprune --gemini-flash
+
+# Force Claude Code CLI for summarization
+npx ccprune --claude-code
 
 # Target a specific session by ID
 npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
@@ -134,16 +155,34 @@ npx ccprune restore 03953bb8-6855-4e53-a987-e11422a03fc6
 
 ## How It Works
 
+```
+BEFORE                 AFTER FIRST PRUNE           AFTER RE-PRUNE
+──────                 ────────────────            ──────────────
+┌───────────────┐      ┌───────────────┐           ┌───────────────┐
+│ msg 1 (old)   │─┐    │ [SUMMARY]     │─┐         │ [NEW SUMMARY] │ ◄─ synthesized
+│ msg 2 (old)   │ │    │ "Previously.."│ │         │ (old+middle)  │
+│ ...           │ ├──► ├───────────────┤ │         ├───────────────┤
+│ msg N (old)   │─┘    │ msg N+1 (kept)│ ├───────► │ msg X (kept)  │
+├───────────────┤      │ msg N+2 (kept)│ │         │ msg Y (kept)  │
+│ msg N+1 (new) │─────►│ msg N+3 (kept)│─┘         │ msg Z (kept)  │
+│ msg N+2 (new) │      └───────────────┘           └───────────────┘
+│ msg N+3 (new) │
+└───────────────┘       ▲                           ▲
+                        │                           │
+                   old msgs become             old summary + middle
+                   summary, recent kept        synthesized, recent kept
+```
+
 1. **Locates Session File**: Finds `$CLAUDE_CONFIG_DIR/projects/{project-path}/{sessionId}.jsonl`
 2. **Preserves Critical Data**: Always keeps the first line (file-history-snapshot or session metadata)
 3. **Smart Pruning**: Finds the Nth-to-last assistant message and keeps everything from that point forward
-4. **AI Summarization**: Generates a structured summary of pruned content (files modified, accomplishments, pending work, key technical details)
-5. **Summary Synthesis**: When re-pruning a session that already has a summary, synthesizes the old summary + newly pruned messages into one cohesive summary
-6. **Chunked Summarization**: For very large transcripts (>30KB with Claude), automatically chunks and summarizes in parts, then combines into a single summary
-7. **Gemini Integration**: Optional `--gemini` flag uses Gemini API for summarization (handles large contexts without chunking)
-8. **Preserves Context**: Keeps all non-message lines (tool results, file-history-snapshots)
-9. **Safe Backup**: Creates backup in `prune-backup/` before modifying
-10. **Process Management**: Graceful cleanup on Ctrl+C and automatic retry on failures
+4. **Content Extraction**: Extracts text from messages, including `tool_result` outputs and `thinking` blocks. Tool calls become `[Used tool: ToolName]` placeholders to provide context without verbose tool I/O
+5. **Orphan Cleanup**: Removes `tool_result` blocks in kept messages that reference `tool_use` blocks from pruned messages
+6. **AI Summarization**: Generates a structured summary with sections: Overview, What Was Accomplished, Files Modified, Key Technical Details, Current State & Pending Work
+7. **Summary Synthesis**: Re-pruning synthesizes old summary + new pruned content into one cohesive summary
+8. **Chunked Summarization**: Large transcripts (>30KB) are chunked and summarized in parts when using `--claude-code`
+9. **Safe Backup**: Creates timestamped backup in `prune-backup/` before modifying
+10. **Auto-Resume**: Optionally resumes Claude Code session after pruning
 
 ## File Structure
 
@@ -171,12 +210,14 @@ CLAUDE_CONFIG_DIR=/custom/path/to/claude ccprune <sessionId> --keep 50
 
 ### GEMINI_API_KEY
 
-Required when using the `--gemini` flag. Get your API key from [Google AI Studio](https://aistudio.google.com/apikey).
+When set, ccprune automatically uses Gemini 2.5 Flash for summarization (recommended). Get your free API key from [Google AI Studio](https://aistudio.google.com/apikey).
 
 ```bash
 export GEMINI_API_KEY=your_api_key_here
-ccprune --gemini
+ccprune  # automatically uses Gemini 2.5 Flash
 ```
+
+Use `--gemini` for Gemini 3 Pro, or `--claude-code` to force Claude Code CLI.
 
 ## Migrating from claude-prune
 
