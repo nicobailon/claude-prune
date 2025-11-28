@@ -890,9 +890,11 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
       } catch { /* not JSON */ }
     }
 
-    // Extract context and timestamp from first real message (skip file-history-snapshot if present)
+    // Extract context, timestamp, parentUuid and index from first real message
     let sessionContext = { sessionId: '', cwd: '', slug: '', gitBranch: '', version: '2.0.53' };
     let firstMessageTimestamp: string | null = null;
+    let firstKeptMsgIndex = -1;
+    let firstKeptMsgParentUuid: string | null = null;
 
     for (let i = 1; i < outLines.length; i++) {
       try {
@@ -906,6 +908,8 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
             version: parsed.version || '2.0.53'
           };
           firstMessageTimestamp = parsed.timestamp || null;
+          firstKeptMsgIndex = i;
+          firstKeptMsgParentUuid = parsed.parentUuid || null;
           break;
         }
       } catch { /* not JSON */ }
@@ -920,13 +924,14 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
       }
     }
 
+    const summaryUuid = generateUUID();
     const summaryLine = JSON.stringify({
       type: "user",
       isCompactSummary: true,
       message: { role: "user", content: summaryContent },
-      uuid: generateUUID(),
+      uuid: summaryUuid,
       timestamp: summaryTimestamp,
-      parentUuid: null,
+      parentUuid: firstKeptMsgParentUuid,
       sessionId: sessionContext.sessionId,
       cwd: sessionContext.cwd,
       slug: sessionContext.slug,
@@ -936,7 +941,20 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
       userType: "external"
     });
 
-    outLines.push(summaryLine);
+    // Insert summary right before first kept message and link the chain
+    if (firstKeptMsgIndex !== -1) {
+      outLines.splice(firstKeptMsgIndex, 0, summaryLine);
+      // Update first kept message (now at firstKeptMsgIndex + 1) to point to summary
+      const adjustedIndex = firstKeptMsgIndex + 1;
+      try {
+        const parsed = JSON.parse(outLines[adjustedIndex]);
+        parsed.parentUuid = summaryUuid;
+        outLines[adjustedIndex] = JSON.stringify(parsed);
+      } catch { /* shouldn't happen */ }
+    } else {
+      // No kept messages - just append summary
+      outLines.push(summaryLine);
+    }
   }
 
   const backupDir = join(getClaudeConfigDir(), "projects", cwdProject, "prune-backup");
@@ -993,18 +1011,14 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
     // Countdown before auto-resume
     if (opts.resume !== false) {
       console.log();
-      console.log(chalk.bold.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
-      console.log(chalk.bold.yellow('                            🚀 AUTO-RESUME COUNTDOWN'));
-      console.log(chalk.bold.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
-      console.log();
 
       const barWidth = 50;
       const spinnerChars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
       let spinnerIndex = 0;
 
-      for (let i = 10; i > 0; i--) {
+      for (let i = 5; i > 0; i--) {
         const spinner = spinnerChars[spinnerIndex % spinnerChars.length];
-        const progress = (10 - i) / 10;
+        const progress = (5 - i) / 5;
         const filled = Math.floor(progress * barWidth);
         const progressBar = chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(barWidth - filled));
 
@@ -1014,6 +1028,7 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
         process.stdout.write('\r' + ' '.repeat(80) + '\r');
         process.stdout.write(
           `  ${chalk.cyan(spinner)} ` +
+          chalk.yellow('RESUMING IN... ') +
           `[${progressBar}] ` +
           chalk.bold.white(`${percentage}% `) +
           chalk.yellow(`(${timeDisplay} remaining) `) +
@@ -1026,8 +1041,6 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
 
       process.stdout.write('\r' + ' '.repeat(80) + '\r');
       console.log(chalk.bold.green('  ✅ RESUMING SESSION NOW!\n'));
-      console.log(chalk.bold.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
-      console.log();
     }
   }
 

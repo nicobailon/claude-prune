@@ -122,7 +122,7 @@ npx ccprune --summary-model haiku
 npx ccprune --gemini
 
 # Use Gemini 2.5 Flash for faster summarization
-npx ccprune --gemini --gemini-flash
+npx ccprune --gemini-flash
 
 # Target a specific session by ID
 npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
