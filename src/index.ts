@@ -992,11 +992,42 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
 
     // Countdown before auto-resume
     if (opts.resume !== false) {
+      console.log();
+      console.log(chalk.bold.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+      console.log(chalk.bold.yellow('                            🚀 AUTO-RESUME COUNTDOWN'));
+      console.log(chalk.bold.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+      console.log();
+
+      const barWidth = 50;
+      const spinnerChars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+      let spinnerIndex = 0;
+
       for (let i = 10; i > 0; i--) {
-        process.stdout.write(`\r${chalk.dim(`Auto-resuming session in ${i}s... (Ctrl+C to cancel)`)}`);
+        const spinner = spinnerChars[spinnerIndex % spinnerChars.length];
+        const progress = (10 - i) / 10;
+        const filled = Math.floor(progress * barWidth);
+        const progressBar = chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(barWidth - filled));
+
+        const percentage = Math.floor(progress * 100);
+        const timeDisplay = i === 1 ? '1 second ' : `${i} seconds`;
+
+        process.stdout.write('\r' + ' '.repeat(80) + '\r');
+        process.stdout.write(
+          `  ${chalk.cyan(spinner)} ` +
+          `[${progressBar}] ` +
+          chalk.bold.white(`${percentage}% `) +
+          chalk.yellow(`(${timeDisplay} remaining) `) +
+          chalk.dim('Press Ctrl+C to cancel')
+        );
+
+        spinnerIndex++;
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
-      process.stdout.write('\r' + ' '.repeat(60) + '\r');
+
+      process.stdout.write('\r' + ' '.repeat(80) + '\r');
+      console.log(chalk.bold.green('  ✅ RESUMING SESSION NOW!\n'));
+      console.log(chalk.bold.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+      console.log();
     }
   }
 
