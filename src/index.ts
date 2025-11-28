@@ -6,9 +6,35 @@ import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
 import { confirm, select } from "@clack/prompts";
-import { spawn } from "child_process";
+import { spawn, ChildProcess } from "child_process";
 import { createSummaryProgress } from "./progress.js";
 import { formatOriginalStats, formatResultStats, countMessageTypes, displayCelebration } from "./stats.js";
+
+// Track active child process for cleanup on signals
+let activeChild: ChildProcess | null = null;
+
+const cleanupChild = () => {
+  const child = activeChild;
+  if (child && !child.killed) {
+    child.kill('SIGTERM');
+    setTimeout(() => {
+      if (child && !child.killed) {
+        child.kill('SIGKILL');
+      }
+    }, 2000);
+  }
+};
+
+process.on('SIGINT', () => {
+  console.log(chalk.yellow('\nInterrupted. Cleaning up...'));
+  cleanupChild();
+  process.exit(130);
+});
+
+process.on('SIGTERM', () => {
+  cleanupChild();
+  process.exit(143);
+});
 
 // ---------- Helper Functions ----------
 export function getClaudeConfigDir(): string {
@@ -135,7 +161,8 @@ program
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
-  .option("--summary-timeout <ms>", "timeout for summary generation in ms (default: 360000)", parseInt)
+  .option("--summary-timeout <ms>", "max total time for summarization in ms (default: 360000)", parseInt)
+  .option("--activity-timeout <ms>", "max time without output before retry in ms (default: 90000)", parseInt)
   .action(pruneCommand);
 
 program
@@ -155,7 +182,8 @@ program
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
-  .option("--summary-timeout <ms>", "timeout for summary generation in ms (default: 360000)", parseInt)
+  .option("--summary-timeout <ms>", "max total time for summarization in ms (default: 360000)", parseInt)
+  .option("--activity-timeout <ms>", "max time without output before retry in ms (default: 90000)", parseInt)
   .action(pruneCommand);
 
 // Count assistant messages (for percentage calculation)
@@ -288,22 +316,39 @@ function getMessageTypeLabel(type: string): string {
   return 'Assistant';
 }
 
+const ACTIVITY_TIMEOUT_MS = 90000; // 90 seconds without output = stuck
+
 async function spawnClaudeAsync(
   args: string[],
   input: string,
   timeoutMs: number,
-  onTick?: () => void
+  onTick?: () => void,
+  onSpawn?: (child: ChildProcess) => void
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let activityTimedOut = false;
     let killTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    let lastActivityTime = Date.now();
+
+    // Allow parent to track this child for cleanup
+    onSpawn?.(child);
 
     const tickInterval = onTick ? setInterval(() => {
       onTick();
     }, 1000) : null;
+
+    // Activity timeout - detect stuck processes with no output
+    const activityCheckInterval = setInterval(() => {
+      if (Date.now() - lastActivityTime > ACTIVITY_TIMEOUT_MS) {
+        activityTimedOut = true;
+        console.log(chalk.yellow('\nNo activity for 90s, process appears stuck...'));
+        child.kill('SIGTERM');
+      }
+    }, 10000);
 
     const timeoutId = setTimeout(() => {
       timedOut = true;
@@ -315,13 +360,31 @@ async function spawnClaudeAsync(
       }, 5000);
     }, timeoutMs);
 
-    child.stdout?.on('data', (data) => { stdout += data.toString(); });
-    child.stderr?.on('data', (data) => { stderr += data.toString(); });
+    child.stdout?.on('data', (data) => {
+      lastActivityTime = Date.now();
+      stdout += data.toString();
+    });
+
+    child.stderr?.on('data', (data) => {
+      lastActivityTime = Date.now();
+      stderr += data.toString();
+    });
+
+    // Handle stdin errors (pipe closed early, etc.)
+    child.stdin?.on('error', (err) => {
+      clearTimeout(timeoutId);
+      if (killTimeoutId) clearTimeout(killTimeoutId);
+      if (tickInterval) clearInterval(tickInterval);
+      clearInterval(activityCheckInterval);
+      child.kill('SIGTERM');
+      reject(new Error(`Failed to write to Claude stdin: ${err.message}`));
+    });
 
     child.on('error', (err: NodeJS.ErrnoException) => {
       clearTimeout(timeoutId);
       if (killTimeoutId) clearTimeout(killTimeoutId);
       if (tickInterval) clearInterval(tickInterval);
+      clearInterval(activityCheckInterval);
       if (err.code === 'ENOENT') {
         reject(new Error('Claude CLI not found. Make sure Claude Code is installed and the "claude" command is available.'));
       } else {
@@ -333,12 +396,16 @@ async function spawnClaudeAsync(
       clearTimeout(timeoutId);
       if (killTimeoutId) clearTimeout(killTimeoutId);
       if (tickInterval) clearInterval(tickInterval);
+      clearInterval(activityCheckInterval);
+
       if (timedOut) {
         const sizeKB = Math.round(input.length / 1024);
         reject(new Error(
           `Summary generation timed out after ${timeoutMs / 1000}s (transcript: ${sizeKB}KB). ` +
           `Try: --summary-model haiku (faster) or --summary-timeout 600000 (10 min)`
         ));
+      } else if (activityTimedOut) {
+        reject(new Error('Process appeared stuck (no output for 90s). Retrying...'));
       } else if (signal) {
         reject(new Error(`Claude CLI was killed by signal ${signal}: ${stderr}`));
       } else if (code !== 0) {
@@ -353,12 +420,84 @@ async function spawnClaudeAsync(
   });
 }
 
+// Chunking constants
+const CHUNK_SIZE = 80000;
+const MAX_SINGLE_PASS = 100000;
+
+function splitIntoChunks(text: string, chunkSize: number): string[] {
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= chunkSize) {
+      chunks.push(remaining);
+      break;
+    }
+    const slice = remaining.substring(0, chunkSize);
+    const lastNewline = slice.lastIndexOf('\n');
+    const cutPoint = lastNewline > chunkSize * 0.8 ? lastNewline : chunkSize;
+
+    chunks.push(remaining.substring(0, cutPoint));
+    remaining = remaining.substring(cutPoint);
+  }
+  return chunks;
+}
+
+async function summarizeChunk(
+  chunk: string,
+  chunkNum: number,
+  totalChunks: number,
+  options: { model?: string; timeout?: number; onProgress?: () => void }
+): Promise<string> {
+  const prompt = `Summarize this conversation segment (part ${chunkNum} of ${totalChunks}).
+Focus on: key decisions, files modified, problems solved, current state.
+Be concise but preserve important technical details.
+
+${chunk}`;
+
+  const args = ['-p'];
+  if (options.model) {
+    args.push('--model', options.model);
+  }
+
+  return await spawnClaudeAsync(args, prompt, options.timeout || 180000, options.onProgress, (child) => {
+    activeChild = child;
+  });
+}
+
+async function combineSummaries(
+  summaries: string[],
+  options: { model?: string; timeout?: number; onProgress?: () => void }
+): Promise<string> {
+  const combined = summaries.map((s, i) => `=== Part ${i + 1} ===\n${s}`).join('\n\n');
+
+  const prompt = `Combine these ${summaries.length} partial summaries into a single coherent summary.
+Start with "Previously, we discussed..." and organize into:
+1. Overview (1-2 sentences)
+2. What Was Accomplished
+3. Files Modified
+4. Key Technical Details
+5. Current State & Pending Work
+
+${combined}`;
+
+  const args = ['-p'];
+  if (options.model) {
+    args.push('--model', options.model);
+  }
+
+  const result = await spawnClaudeAsync(args, prompt, options.timeout || 180000, options.onProgress, (child) => {
+    activeChild = child;
+  });
+  return result.trim();
+}
+
 // Extract summarization logic for testing
 export async function generateSummary(
   droppedMessages: { type: string, content: string, isSummary?: boolean }[],
   options: { maxLength?: number; model?: string; timeout?: number; onProgress?: () => void } = {}
 ): Promise<string> {
-  const maxLength = options.maxLength || 60000;
+  const maxLength = options.maxLength || MAX_SINGLE_PASS;
 
   // Separate existing summary from chat messages for synthesis
   const existingSummary = droppedMessages.find(m => m.isSummary);
@@ -373,13 +512,26 @@ export async function generateSummary(
     .map(msg => `${getMessageTypeLabel(msg.type)}: ${msg.content}`)
     .join('\n\n');
 
+  // For very large transcripts, use chunked summarization
   if (transcriptToSummarize.length > maxLength) {
-    console.log(chalk.yellow(`\nTranscript too long (${transcriptToSummarize.length} chars). Truncating to ${maxLength} chars...`));
-    const truncated = transcriptToSummarize.substring(0, maxLength);
-    const lastSpace = truncated.lastIndexOf(' ');
-    const lastNewline = truncated.lastIndexOf('\n');
-    const cutPoint = Math.max(lastSpace, lastNewline);
-    transcriptToSummarize = truncated.substring(0, cutPoint > 0 ? cutPoint : maxLength) + '\n\n... (transcript truncated due to length)';
+    console.log(chalk.yellow(`\nTranscript very large (${Math.round(transcriptToSummarize.length / 1024)}KB). Summarizing in chunks...`));
+
+    const chunkSize = Math.min(CHUNK_SIZE, maxLength);
+    const chunks = splitIntoChunks(transcriptToSummarize, chunkSize);
+    const chunkSummaries: string[] = [];
+
+    for (let i = 0; i < chunks.length; i++) {
+      console.log(chalk.dim(`  Chunk ${i + 1}/${chunks.length}...`));
+      const chunkSummary = await summarizeChunk(chunks[i], i + 1, chunks.length, options);
+      chunkSummaries.push(chunkSummary);
+    }
+
+    // If there's an existing summary, include it in the combination
+    if (existingSummary) {
+      chunkSummaries.unshift(`=== Previous Summary ===\n${existingSummary.content}`);
+    }
+
+    return await combineSummaries(chunkSummaries, options);
   }
 
   let prompt: string;
@@ -446,14 +598,16 @@ ${transcriptToSummarize}`;
   }
 
   const timeout = options.timeout || 360000;
-  const summaryContent = await spawnClaudeAsync(args, prompt, timeout, options.onProgress);
+  const summaryContent = await spawnClaudeAsync(args, prompt, timeout, options.onProgress, (child) => {
+    activeChild = child;
+  });
   return summaryContent.trim();
 }
 
 // ---------- Prune Command Wrapper ----------
 async function pruneCommand(
   sessionId: string | undefined,
-  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number }
+  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; activityTimeout?: number }
 ) {
   const projectDir = getProjectDir();
 
@@ -499,7 +653,7 @@ async function pruneCommand(
 }
 
 // ---------- Main ----------
-async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number }) {
+async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; activityTimeout?: number }) {
   const cwdProject = process.cwd().replace(/\//g, '-');
   const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
 
@@ -550,7 +704,7 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
   }));
   console.log();
 
-  const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, keepN);
+  const { outLines, kept, dropped, droppedMessages } = pruneSessionLines(lines, keepN);
   console.log(chalk.dim(`Keeping ${keepN} assistant messages${percentInfo} (${kept} lines kept, ${dropped} dropped)`));
 
   // Check if there's an existing summary in the KEPT portion that needs synthesis
@@ -587,18 +741,32 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
     progress.start();
     const summaryStartTime = Date.now();
 
-    try {
-      summaryContent = await generateSummary(droppedMessages, {
-        model: opts.summaryModel,
-        timeout: opts.summaryTimeout,
-        onProgress: () => progress.update()
-      });
-      summaryDurationSec = Math.floor((Date.now() - summaryStartTime) / 1000);
-      summaryGenerated = true;
-      progress.succeed();
-    } catch (error: any) {
-      progress.fail(`Failed to generate summary: ${error.message}`);
-      console.error(chalk.red(error.message));
+    const MAX_SUMMARY_RETRIES = 2;
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= MAX_SUMMARY_RETRIES; attempt++) {
+      try {
+        summaryContent = await generateSummary(droppedMessages, {
+          model: opts.summaryModel,
+          timeout: opts.summaryTimeout,
+          onProgress: () => progress.update()
+        });
+        summaryDurationSec = Math.floor((Date.now() - summaryStartTime) / 1000);
+        summaryGenerated = true;
+        progress.succeed();
+        break;
+      } catch (error: any) {
+        lastError = error;
+        if (attempt < MAX_SUMMARY_RETRIES) {
+          console.log(chalk.yellow(`\nSummary attempt ${attempt} failed: ${error.message}`));
+          console.log(chalk.yellow('Retrying...'));
+        }
+      }
+    }
+
+    if (!summaryContent && lastError) {
+      progress.fail(`Failed to generate summary after ${MAX_SUMMARY_RETRIES} attempts`);
+      console.error(chalk.red(lastError.message));
       process.exit(1);
     }
   }

@@ -9,15 +9,21 @@ vi.mock('child_process', () => ({
 
 vi.mock('chalk', () => ({
   default: {
-    yellow: vi.fn((msg: string) => msg)
+    yellow: vi.fn((msg: string) => msg),
+    dim: vi.fn((msg: string) => msg)
   }
 }));
 
 import { generateSummary } from './index.js';
 
+interface MockStdin extends EventEmitter {
+  write: ReturnType<typeof vi.fn>;
+  end: ReturnType<typeof vi.fn>;
+}
+
 interface MockChildProcess {
   child: ChildProcess;
-  stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+  stdin: MockStdin;
   stdout: EventEmitter;
   stderr: EventEmitter;
   emit: (event: string, ...args: unknown[]) => boolean;
@@ -27,11 +33,13 @@ interface MockChildProcess {
 function createMockChildProcess(): MockChildProcess {
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
-  const stdin = { write: vi.fn(), end: vi.fn() };
+  const stdin = new EventEmitter() as MockStdin;
+  stdin.write = vi.fn();
+  stdin.end = vi.fn();
   const child = new EventEmitter() as ChildProcess;
   (child as unknown as { stdout: EventEmitter }).stdout = stdout;
   (child as unknown as { stderr: EventEmitter }).stderr = stderr;
-  (child as unknown as { stdin: typeof stdin }).stdin = stdin;
+  (child as unknown as { stdin: MockStdin }).stdin = stdin;
   (child as unknown as { kill: ReturnType<typeof vi.fn> }).kill = vi.fn();
   (child as unknown as { killed: boolean }).killed = false;
   return { child, stdin, stdout, stderr, emit: child.emit.bind(child), kill: (child as unknown as { kill: ReturnType<typeof vi.fn> }).kill };
@@ -94,11 +102,9 @@ describe('generateSummary', () => {
     expect(writtenContent).toContain('User: Question 2');
   });
 
-  it('should truncate long transcripts', async () => {
+  it('should handle large transcripts under default limit without chunking', async () => {
     const longContent = 'A'.repeat(20000);
     const droppedMessages = [
-      { type: 'user', content: longContent },
-      { type: 'assistant', content: longContent },
       { type: 'user', content: longContent },
       { type: 'assistant', content: longContent }
     ];
@@ -106,16 +112,16 @@ describe('generateSummary', () => {
     const mock = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mock.child);
 
-    const resultPromise = generateSummary(droppedMessages, { maxLength: 60000 });
+    const resultPromise = generateSummary(droppedMessages);
 
-    mock.stdout.emit('data', 'Summary of truncated content\n');
+    mock.stdout.emit('data', 'Summary of content\n');
     mock.emit('close', 0);
 
     await resultPromise;
 
     const writtenContent = mock.stdin.write.mock.calls[0][0] as string;
-    expect(writtenContent).toContain('... (transcript truncated due to length)');
-    expect(chalk.yellow).toHaveBeenCalledWith(expect.stringContaining('Transcript too long'));
+    expect(writtenContent).toContain('User: ' + longContent);
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it('should pass single quotes without escaping (using stdin)', async () => {
@@ -214,26 +220,62 @@ describe('generateSummary', () => {
     await expect(resultPromise).rejects.toThrow('Summary generation timed out');
   });
 
-  it('should respect custom maxLength option', async () => {
-    const longContent = 'B'.repeat(5000);
+  it('should handle multiple messages in single pass when under limit', async () => {
+    const content = 'B'.repeat(5000);
     const droppedMessages = Array(5).fill(null).map(() => ({
       type: 'user',
-      content: longContent
+      content: content
     }));
 
     const mock = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mock.child);
 
-    const resultPromise = generateSummary(droppedMessages, { maxLength: 10000 });
+    const resultPromise = generateSummary(droppedMessages);
 
     mock.stdout.emit('data', 'Summary\n');
     mock.emit('close', 0);
 
-    await resultPromise;
+    const result = await resultPromise;
 
-    const writtenContent = mock.stdin.write.mock.calls[0][0] as string;
-    expect(writtenContent).toContain('... (transcript truncated due to length)');
-    expect(chalk.yellow).toHaveBeenCalledWith(expect.stringContaining('Truncating to 10000 chars'));
+    expect(result).toBe('Summary');
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('should use chunked summarization when maxLength exceeded', async () => {
+    const longContent = 'C'.repeat(6000);
+    const droppedMessages = Array(3).fill(null).map(() => ({
+      type: 'user',
+      content: longContent
+    }));
+
+    // Create mocks that will be returned in sequence
+    const mocks = [
+      createMockChildProcess(), // Chunk 1
+      createMockChildProcess(), // Chunk 2
+      createMockChildProcess()  // Combine
+    ];
+    let mockIndex = 0;
+    vi.mocked(spawn).mockImplementation(() => {
+      const mock = mocks[mockIndex];
+      mockIndex++;
+      // Schedule the mock responses
+      setTimeout(() => {
+        mock.stdout.emit('data', `Response ${mockIndex}\n`);
+        mock.emit('close', 0);
+      }, 10);
+      return mock.child;
+    });
+
+    const resultPromise = generateSummary(droppedMessages, { maxLength: 10000 });
+
+    // Advance timers to let all mocks respond
+    await vi.advanceTimersByTimeAsync(100);
+
+    const result = await resultPromise;
+
+    expect(result).toBe('Response 3');
+    expect(spawn).toHaveBeenCalledTimes(3); // 2 chunks + 1 combine
+    expect(chalk.yellow).toHaveBeenCalledWith(expect.stringContaining('Summarizing in chunks'));
   });
 
   it('should pass model option to claude CLI', async () => {
@@ -348,10 +390,14 @@ describe('generateSummary', () => {
 
     const resultPromise = generateSummary([{ type: 'user', content: 'test' }]);
 
-    vi.advanceTimersByTime(359999);
-    expect(mock.kill).not.toHaveBeenCalled();
+    // Emit activity frequently to prevent activity timeout (90s)
+    // Advance in small increments and emit data before activity timeout triggers
+    for (let elapsed = 0; elapsed < 360000; elapsed += 5000) {
+      mock.stdout.emit('data', '.'); // Keep activity alive
+      vi.advanceTimersByTime(5000);
+    }
 
-    vi.advanceTimersByTime(1);
+    // At 360000ms, should have been killed by main timeout
     expect(mock.kill).toHaveBeenCalledWith('SIGTERM');
 
     mock.emit('close', null);

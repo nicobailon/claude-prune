@@ -83,6 +83,7 @@ ccprune restore <sessionId> [--dry-run]
 | `--dry-run` | Preview changes and summary without modifying files |
 | `--no-summary` | Skip AI summarization of pruned messages |
 | `--summary-model <model>` | Model for summarization (haiku, sonnet, or full name) |
+| `--summary-timeout <ms>` | Timeout for summarization in milliseconds (default: 360000) |
 | `-h, --help` | Show help information |
 | `-V, --version` | Show version number |
 
@@ -129,9 +130,10 @@ npx ccprune restore 03953bb8-6855-4e53-a987-e11422a03fc6
 3. **Smart Pruning**: Finds the Nth-to-last assistant message and keeps everything from that point forward
 4. **AI Summarization**: Generates a structured summary of pruned content (files modified, accomplishments, pending work, key technical details)
 5. **Summary Synthesis**: When re-pruning a session that already has a summary, synthesizes the old summary + newly pruned messages into one cohesive summary
-6. **Preserves Context**: Keeps all non-message lines (tool results, file-history-snapshots)
-7. **Safe Backup**: Creates backup in `prune-backup/` before modifying
-8. **Interactive Confirmation**: Asks for confirmation unless using `--dry-run`
+6. **Chunked Summarization**: For very large transcripts (>100KB), automatically chunks and summarizes in parts, then combines into a single summary
+7. **Preserves Context**: Keeps all non-message lines (tool results, file-history-snapshots)
+8. **Safe Backup**: Creates backup in `prune-backup/` before modifying
+9. **Process Management**: Graceful cleanup on Ctrl+C, activity timeout detection (90s), and automatic retry on failures
 
 ## File Structure
 
