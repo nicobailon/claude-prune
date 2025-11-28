@@ -3,7 +3,7 @@
 ## [1.2.0] - 2024-XX-XX
 ### Added
 - New `--summarize-pruned` flag for the `prune` command that generates a summary of removed messages using Claude CLI
-- Summary is prepended to the session as a special message with `isCompactSummary: true` flag
+- Summary is appended to the session as a special message with `isCompactSummary: true` flag
 - Automatic detection and handling of missing Claude CLI with helpful error messages
 - Timeout protection (30s) for summarization calls
 

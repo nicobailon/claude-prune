@@ -460,7 +460,6 @@ describe('summarization behavior', () => {
   });
 
   it('should handle summary insertion after pruning', () => {
-    // Test the behavior of inserting summary at position 1
     const outLines = ['header line', 'message 1', 'message 2'];
     const summaryLine = JSON.stringify({
       type: "user",
@@ -468,14 +467,13 @@ describe('summarization behavior', () => {
       message: { content: "Previously, we discussed test topics." }
     });
 
-    // Insert summary after first line
-    outLines.splice(1, 0, summaryLine);
+    outLines.push(summaryLine);
 
     expect(outLines).toHaveLength(4);
     expect(outLines[0]).toBe('header line');
-    expect(outLines[1]).toBe(summaryLine);
-    expect(outLines[2]).toBe('message 1');
-    expect(outLines[3]).toBe('message 2');
+    expect(outLines[1]).toBe('message 1');
+    expect(outLines[2]).toBe('message 2');
+    expect(outLines[3]).toBe(summaryLine);
   });
 
   it('should handle empty outLines array for summary insertion', () => {
@@ -486,15 +484,42 @@ describe('summarization behavior', () => {
       message: { content: "Summary content" }
     });
 
-    // When outLines is empty, push to end
-    if (outLines.length > 0) {
-      outLines.splice(1, 0, summaryLine);
-    } else {
-      outLines.push(summaryLine);
-    }
+    outLines.push(summaryLine);
 
     expect(outLines).toHaveLength(1);
     expect(outLines[0]).toBe(summaryLine);
+  });
+
+  it('should remove existing summary before appending new one (deduplication)', () => {
+    const oldSummary = JSON.stringify({
+      type: "user",
+      isCompactSummary: true,
+      message: { content: "Old summary from previous prune" }
+    });
+    const outLines = ['header line', 'message 1', oldSummary, 'message 2'];
+    const newSummary = JSON.stringify({
+      type: "user",
+      isCompactSummary: true,
+      message: { content: "New summary" }
+    });
+
+    // Simulate deduplication logic: remove existing summaries
+    for (let i = outLines.length - 1; i >= 1; i--) {
+      try {
+        const parsed = JSON.parse(outLines[i]);
+        if (parsed.isCompactSummary === true) {
+          outLines.splice(i, 1);
+        }
+      } catch { /* not JSON */ }
+    }
+    outLines.push(newSummary);
+
+    expect(outLines).toHaveLength(4);
+    expect(outLines[0]).toBe('header line');
+    expect(outLines[1]).toBe('message 1');
+    expect(outLines[2]).toBe('message 2');
+    expect(outLines[3]).toBe(newSummary);
+    expect(outLines.filter(l => l.includes('isCompactSummary')).length).toBe(1);
   });
 });
 

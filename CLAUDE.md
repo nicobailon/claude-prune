@@ -65,7 +65,7 @@ Single-file CLI: all core logic in `src/index.ts` with functions exported for te
 - Uses stdin to pipe prompt to `claude -p` CLI (no shell escaping needed)
 - Supports `--model` option for model selection (haiku, sonnet, or full name)
 - Returns summary starting with "Previously, we discussed..."
-- Result inserted as `{ type: "user", isCompactSummary: true, message: {...} }` after first line
+- Result appended as `{ type: "user", isCompactSummary: true, message: {...} }` at end of session
 
 **`findLatestBackup(backupFiles, sessionId)`** - Backup discovery:
 - Filters by pattern `{sessionId}.jsonl.{timestamp}`

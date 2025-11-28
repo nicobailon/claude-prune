@@ -8,6 +8,7 @@ import ora from "ora";
 import { confirm } from "@clack/prompts";
 import { spawn } from "child_process";
 import { createSummaryProgress } from "./progress.js";
+import { formatOriginalStats, formatResultStats, countMessageTypes } from "./stats.js";
 
 // ---------- Helper Functions ----------
 export function getClaudeConfigDir(): string {
@@ -440,14 +441,30 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
     percentInfo = ` (default 20% of ${totalAssistant})`;
   }
 
+  const originalSizeKB = Math.round(raw.length / 1024);
+  const msgCounts = countMessageTypes(lines);
+
+  spinner.succeed(`${chalk.green("Scanned")} ${file}`);
+  console.log();
+  console.log(formatOriginalStats({
+    lines: lines.length,
+    userMsgs: msgCounts.user,
+    assistantMsgs: msgCounts.assistant,
+    systemMsgs: msgCounts.system,
+    sizeKB: originalSizeKB
+  }));
+  console.log();
+
   const { outLines, kept, dropped, assistantCount, droppedMessages } = pruneSessionLines(lines, keepN);
-  spinner.succeed(`${chalk.green("Scanned")} ${lines.length} lines (${kept} kept, ${dropped} dropped) - keeping ${keepN} assistant messages${percentInfo}`);
+  console.log(chalk.dim(`Keeping ${keepN} assistant messages${percentInfo} (${kept} lines kept, ${dropped} dropped)`));
 
   // Summarization is ON by default (opts.summary is undefined or true)
   // OFF only when explicitly set to false via --no-summary
   const shouldSummarize = opts.summary !== false && droppedMessages.length > 0;
 
   let summaryContent: string | null = null;
+  let summaryDurationSec = 0;
+  let summaryGenerated = false;
   if (shouldSummarize) {
     const transcriptSize = Math.round(droppedMessages.reduce((acc, m) => acc + m.content.length, 0) / 1024);
 
@@ -457,6 +474,7 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
     });
 
     progress.start();
+    const summaryStartTime = Date.now();
 
     try {
       summaryContent = await generateSummary(droppedMessages, {
@@ -464,6 +482,8 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
         timeout: opts.summaryTimeout,
         onProgress: () => progress.update()
       });
+      summaryDurationSec = Math.floor((Date.now() - summaryStartTime) / 1000);
+      summaryGenerated = true;
       progress.succeed();
     } catch (error: any) {
       progress.fail(`Failed to generate summary: ${error.message}`);
@@ -487,7 +507,7 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
       console.log(chalk.dim("─".repeat(60)));
       console.log(chalk.white(summaryContent));
       console.log(chalk.dim("─".repeat(60)));
-      console.log(chalk.dim("(Would be inserted after first line)"));
+      console.log(chalk.dim("(Would be appended to end of session)"));
     }
     console.log(chalk.cyan("\nNo files written."));
     return;
@@ -495,6 +515,16 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
 
   // Insert summary if generated
   if (summaryContent) {
+    // Remove any existing summary from kept lines to avoid duplicates on re-prune
+    for (let i = outLines.length - 1; i >= 1; i--) {
+      try {
+        const parsed = JSON.parse(outLines[i]);
+        if (parsed.isCompactSummary === true) {
+          outLines.splice(i, 1);
+        }
+      } catch { /* not JSON */ }
+    }
+
     // Extract context from first real message (skip file-history-snapshot if present)
     let sessionContext = { sessionId: '', cwd: '', slug: '', gitBranch: '', version: '2.0.53' };
 
@@ -530,22 +560,41 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
       userType: "external"
     });
 
-    if (outLines.length > 0) {
-      outLines.splice(1, 0, summaryLine);
-    } else {
-      outLines.push(summaryLine);
-    }
+    outLines.push(summaryLine);
   }
 
   const backupDir = join(getClaudeConfigDir(), "projects", cwdProject, "prune-backup");
   await fs.ensureDir(backupDir);
   const backup = join(backupDir, `${sessionId}.jsonl.${Date.now()}`);
   await fs.copyFile(file, backup);
-  await fs.writeFile(file, outLines.join("\n") + "\n");
 
-  const summaryMsg = summaryContent ? chalk.blue(" (+1 summary)") : "";
-  console.log(chalk.bold.green("Done:"), chalk.white(`${file}${summaryMsg}`));
-  console.log(chalk.dim(`Backup at ${backup}`));
+  const finalContent = outLines.join("\n") + "\n";
+  await fs.writeFile(file, finalContent);
+
+  const finalSizeKB = Math.round(finalContent.length / 1024);
+  const finalAssistantCount = countMessageTypes(outLines).assistant;
+
+  console.log();
+  console.log(formatResultStats({
+    before: {
+      lines: lines.length,
+      assistantMsgs: msgCounts.assistant,
+      sizeKB: originalSizeKB
+    },
+    after: {
+      lines: outLines.length,
+      assistantMsgs: finalAssistantCount,
+      sizeKB: finalSizeKB
+    },
+    summary: summaryGenerated ? {
+      sizeKB: Math.round(summaryContent!.length / 1024) || 1,
+      durationSec: summaryDurationSec,
+      model: opts.summaryModel
+    } : undefined,
+    backupPath: backup
+  }));
+  console.log();
+  console.log(chalk.bold.green("Done:"), chalk.white(file));
 }
 
 // Extract restore logic for testing
