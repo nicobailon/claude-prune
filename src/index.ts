@@ -140,7 +140,7 @@ export async function findLatestSession(projectDir: string): Promise<SessionInfo
 }
 
 export function getProjectDir(): string {
-  const cwdProject = process.cwd().replace(/\//g, '-');
+  const cwdProject = process.cwd().replace(/[\/\.]/g, '-');
   return join(getClaudeConfigDir(), "projects", cwdProject);
 }
 
@@ -151,31 +151,13 @@ const program = new Command()
   .version("2.3.1");
 
 program
-  .command("prune")
-  .description("Prune early messages from a session (summarizes by default)")
-  .argument("[sessionId]", "UUID of the session (auto-detects latest if omitted)")
-  .option("-k, --keep <number>", "number of assistant messages to keep", parseInt)
-  .option("-p, --keep-percent <number>", "percentage of assistant messages to keep (1-100)", parseInt)
-  .option("--pick", "interactively select from available sessions")
-  .option("-n, --no-resume", "skip automatic session resume")
-  .option("--dry-run", "preview changes without writing (still generates summary preview)")
-  .option("--no-summary", "skip AI summarization of pruned messages")
-  .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
-  .option("--summary-timeout <ms>", "max total time for summarization in ms (default: 360000)", parseInt)
-  .option("--gemini", "use Gemini 3 Pro for summarization (requires GEMINI_API_KEY)")
-  .option("--gemini-flash", "use Gemini 2.5 Flash for summarization (requires GEMINI_API_KEY)")
-  .action(function(sessionId) {
-    return pruneCommand(sessionId, this.opts());
-  });
-
-program
   .command("restore")
   .description("Restore a session from the latest backup")
   .argument("<sessionId>", "UUID of the session to restore (without .jsonl)")
   .option("--dry-run", "show what would be restored but don't write")
   .action(restore);
 
-// For backward compatibility, make prune the default command
+// Default command - prune session
 program
   .argument("[sessionId]", "UUID of the session (auto-detects latest if omitted)")
   .option("-k, --keep <number>", "number of assistant messages to keep", parseInt)
@@ -722,12 +704,34 @@ async function pruneCommand(
       process.exit(1);
     }
 
+    const sessionContent = await fs.readFile(latest.path, 'utf-8');
+    const sessionLines = sessionContent.split('\n').filter(l => l.trim());
+    const assistantCount = countAssistantMessages(sessionLines);
+
     console.log();
     console.log(chalk.bold.cyan('SESSION'));
     console.log(chalk.white('  ID: ') + chalk.bold.yellow(latest.id));
     console.log(chalk.white('  Modified: ') + chalk.dim(latest.modifiedAt.toLocaleString()));
     console.log(chalk.white('  Size: ') + chalk.dim(`${latest.sizeKB}KB`));
+    console.log(chalk.white('  Messages: ') + chalk.dim(`${assistantCount} assistant`));
     console.log();
+
+    if (assistantCount < 5) {
+      console.log(chalk.yellow('Warning: This session has very few messages.'));
+      console.log(chalk.dim('This may not be the session you intended to prune.'));
+      console.log();
+
+      const shouldContinue = await confirm({
+        message: 'Continue with this session?',
+        initialValue: false
+      });
+
+      if (shouldContinue !== true) {
+        console.log(chalk.dim('Use --pick to select a different session'));
+        process.exit(0);
+      }
+    }
+
     sessionId = latest.id;
   }
 
@@ -736,7 +740,7 @@ async function pruneCommand(
 
 // ---------- Main ----------
 async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean }) {
-  const cwdProject = process.cwd().replace(/\//g, '-');
+  const cwdProject = process.cwd().replace(/[\/\.]/g, '-');
   const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
 
   if (!(await fs.pathExists(file))) {
@@ -1081,7 +1085,7 @@ export function findLatestBackup(backupFiles: string[], sessionId: string): { na
 
 // ---------- Restore ----------
 async function restore(sessionId: string, opts: { dryRun?: boolean }) {
-  const cwdProject = process.cwd().replace(/\//g, '-');
+  const cwdProject = process.cwd().replace(/[\/\.]/g, '-');
   const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
   const backupDir = join(getClaudeConfigDir(), "projects", cwdProject, "prune-backup");
 
