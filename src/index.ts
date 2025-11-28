@@ -5,7 +5,7 @@ import fs from "fs-extra";
 import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
-import { confirm } from "@clack/prompts";
+import { confirm, select } from "@clack/prompts";
 import { spawn } from "child_process";
 import { createSummaryProgress } from "./progress.js";
 import { formatOriginalStats, formatResultStats, countMessageTypes } from "./stats.js";
@@ -63,23 +63,70 @@ export function generateUUID(): string {
   });
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface SessionInfo {
+  id: string;
+  path: string;
+  modifiedAt: Date;
+  sizeKB: number;
+}
+
+export async function listSessions(projectDir: string): Promise<SessionInfo[]> {
+  if (!(await fs.pathExists(projectDir))) {
+    return [];
+  }
+
+  const files = await fs.readdir(projectDir);
+  const sessions: SessionInfo[] = [];
+
+  for (const file of files) {
+    if (!file.endsWith('.jsonl')) continue;
+    const id = file.replace('.jsonl', '');
+    if (!UUID_PATTERN.test(id)) continue;
+
+    const filePath = join(projectDir, file);
+    const stat = await fs.stat(filePath);
+    sessions.push({
+      id,
+      path: filePath,
+      modifiedAt: stat.mtime,
+      sizeKB: Math.round(stat.size / 1024)
+    });
+  }
+
+  return sessions.sort((a, b) => b.modifiedAt.getTime() - a.modifiedAt.getTime());
+}
+
+export async function findLatestSession(projectDir: string): Promise<SessionInfo | null> {
+  const sessions = await listSessions(projectDir);
+  return sessions.length > 0 ? sessions[0] : null;
+}
+
+export function getProjectDir(): string {
+  const cwdProject = process.cwd().replace(/\//g, '-');
+  return join(getClaudeConfigDir(), "projects", cwdProject);
+}
+
 // ---------- CLI Definition ----------
 const program = new Command()
   .name("ccprune")
   .description("Prune early messages from a Claude Code session.jsonl file")
-  .version("2.2.0");
+  .version("2.3.0");
 
 program
   .command("prune")
   .description("Prune early messages from a session (summarizes by default)")
-  .argument("<sessionId>", "UUID of the session (without .jsonl)")
+  .argument("[sessionId]", "UUID of the session (auto-detects latest if omitted)")
   .option("-k, --keep <number>", "number of assistant messages to keep", parseInt)
   .option("-p, --keep-percent <number>", "percentage of assistant messages to keep (1-100)", parseInt)
+  .option("--pick", "interactively select from available sessions")
+  .option("--resume", "automatically resume the session after pruning")
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
   .option("--summary-timeout <ms>", "timeout for summary generation in ms (default: 360000)", parseInt)
-  .action(main);
+  .action(pruneCommand);
 
 program
   .command("restore")
@@ -90,20 +137,16 @@ program
 
 // For backward compatibility, make prune the default command
 program
-  .argument("[sessionId]", "UUID of the session (without .jsonl)")
+  .argument("[sessionId]", "UUID of the session (auto-detects latest if omitted)")
   .option("-k, --keep <number>", "number of assistant messages to keep", parseInt)
   .option("-p, --keep-percent <number>", "percentage of assistant messages to keep (1-100)", parseInt)
+  .option("--pick", "interactively select from available sessions")
+  .option("--resume", "automatically resume the session after pruning")
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
   .option("--summary-timeout <ms>", "timeout for summary generation in ms (default: 360000)", parseInt)
-  .action((sessionId, opts: { keep?: number; keepPercent?: number; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number }) => {
-    if (sessionId) {
-      main(sessionId, opts);
-    } else {
-      program.help();
-    }
-  });
+  .action(pruneCommand);
 
 // Count assistant messages (for percentage calculation)
 export function countAssistantMessages(lines: string[]): number {
@@ -397,8 +440,53 @@ ${transcriptToSummarize}`;
   return summaryContent.trim();
 }
 
+// ---------- Prune Command Wrapper ----------
+async function pruneCommand(
+  sessionId: string | undefined,
+  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number }
+) {
+  const projectDir = getProjectDir();
+
+  if (opts.pick) {
+    const sessions = await listSessions(projectDir);
+    if (sessions.length === 0) {
+      console.error(chalk.red(`No sessions found in ${projectDir}`));
+      process.exit(1);
+    }
+
+    const selected = await select({
+      message: 'Select a session to prune:',
+      options: sessions.map(s => ({
+        value: s.id,
+        label: `${s.id.slice(0, 8)}...`,
+        hint: `${s.sizeKB}KB - ${s.modifiedAt.toLocaleString()}`
+      }))
+    });
+
+    if (typeof selected !== 'string') {
+      process.exit(0);
+    }
+
+    sessionId = selected;
+  } else if (!sessionId) {
+    const latest = await findLatestSession(projectDir);
+    if (!latest) {
+      console.error(chalk.red(`No sessions found in ${projectDir}`));
+      console.error(chalk.dim('Run from your project directory, or use --pick to select a session'));
+      process.exit(1);
+    }
+
+    console.log(chalk.dim(`Auto-selected latest session: ${latest.id}`));
+    console.log(chalk.dim(`  Modified: ${latest.modifiedAt.toLocaleString()} (${latest.sizeKB}KB)`));
+    console.log();
+    sessionId = latest.id;
+  }
+
+  return main(sessionId, opts);
+}
+
 // ---------- Main ----------
-async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number }) {
+async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number }) {
   const cwdProject = process.cwd().replace(/\//g, '-');
   const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
 
@@ -611,6 +699,33 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
   }));
   console.log();
   console.log(chalk.bold.green("Done:"), chalk.white(file));
+
+  if (process.stdin.isTTY) {
+    const confirmResult = opts.resume || await confirm({
+      message: 'Resume this session now?',
+      initialValue: true
+    });
+
+    if (confirmResult === true) {
+      console.log(chalk.dim(`\nRunning: claude --resume ${sessionId}\n`));
+      const child = spawn('claude', ['--resume', sessionId], {
+        stdio: 'inherit'
+      });
+      child.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'ENOENT') {
+          console.error(chalk.red('\nClaude CLI not found. Run manually:'));
+          console.error(chalk.white(`  claude --resume ${sessionId}`));
+        } else {
+          console.error(chalk.red(`\nFailed to start claude: ${err.message}`));
+        }
+        process.exit(1);
+      });
+      child.on('close', (code) => {
+        process.exit(code ?? 0);
+      });
+      return new Promise<void>(() => {});
+    }
+  }
 }
 
 // Extract restore logic for testing

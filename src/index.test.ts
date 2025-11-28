@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { pruneSessionLines, findLatestBackup, getClaudeConfigDir, countAssistantMessages, extractMessageContent, generateUUID } from './index.js';
+import { pruneSessionLines, findLatestBackup, getClaudeConfigDir, countAssistantMessages, extractMessageContent, generateUUID, listSessions, findLatestSession, getProjectDir } from './index.js';
 import { execSync } from 'child_process';
 import { homedir } from 'os';
 import { join } from 'path';
+import fs from 'fs-extra';
 
 vi.mock('child_process', () => ({
   execSync: vi.fn()
@@ -834,5 +835,98 @@ describe('pruneSessionLines with array content', () => {
     expect(droppedMessages).toHaveLength(2);
     expect(droppedMessages[0].content).toBe('');
     expect(droppedMessages[1].content).toBe('Valid');
+  });
+});
+
+describe('listSessions', () => {
+  const testDir = '/tmp/ccprune-test-sessions';
+
+  beforeEach(async () => {
+    await fs.ensureDir(testDir);
+  });
+
+  afterEach(async () => {
+    await fs.remove(testDir);
+  });
+
+  it('should return empty array for non-existent directory', async () => {
+    const sessions = await listSessions('/non/existent/path');
+    expect(sessions).toEqual([]);
+  });
+
+  it('should return empty array for empty directory', async () => {
+    const sessions = await listSessions(testDir);
+    expect(sessions).toEqual([]);
+  });
+
+  it('should find UUID sessions and ignore agent sessions', async () => {
+    await fs.writeFile(join(testDir, '03953bb8-6855-4e53-a987-e11422a03fc6.jsonl'), 'test');
+    await fs.writeFile(join(testDir, 'agent-b37f4f2f.jsonl'), 'test');
+    await fs.writeFile(join(testDir, 'other.txt'), 'test');
+
+    const sessions = await listSessions(testDir);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].id).toBe('03953bb8-6855-4e53-a987-e11422a03fc6');
+  });
+
+  it('should sort sessions by modification time (newest first)', async () => {
+    const id1 = '03953bb8-6855-4e53-a987-e11422a03fc6';
+    const id2 = '12345678-1234-1234-1234-123456789012';
+
+    await fs.writeFile(join(testDir, `${id1}.jsonl`), 'older');
+    await new Promise(r => setTimeout(r, 50));
+    await fs.writeFile(join(testDir, `${id2}.jsonl`), 'newer');
+
+    const sessions = await listSessions(testDir);
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0].id).toBe(id2);
+    expect(sessions[1].id).toBe(id1);
+  });
+
+  it('should include size and modification time', async () => {
+    const content = 'x'.repeat(2048);
+    await fs.writeFile(join(testDir, '03953bb8-6855-4e53-a987-e11422a03fc6.jsonl'), content);
+
+    const sessions = await listSessions(testDir);
+    expect(sessions[0].sizeKB).toBe(2);
+    expect(sessions[0].modifiedAt).toBeInstanceOf(Date);
+  });
+});
+
+describe('findLatestSession', () => {
+  const testDir = '/tmp/ccprune-test-latest';
+
+  beforeEach(async () => {
+    await fs.ensureDir(testDir);
+  });
+
+  afterEach(async () => {
+    await fs.remove(testDir);
+  });
+
+  it('should return null for empty directory', async () => {
+    const result = await findLatestSession(testDir);
+    expect(result).toBeNull();
+  });
+
+  it('should return the most recent session', async () => {
+    const id1 = '03953bb8-6855-4e53-a987-e11422a03fc6';
+    const id2 = '12345678-1234-1234-1234-123456789012';
+
+    await fs.writeFile(join(testDir, `${id1}.jsonl`), 'older');
+    await new Promise(r => setTimeout(r, 50));
+    await fs.writeFile(join(testDir, `${id2}.jsonl`), 'newer');
+
+    const result = await findLatestSession(testDir);
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe(id2);
+  });
+});
+
+describe('getProjectDir', () => {
+  it('should construct project dir from cwd', () => {
+    const dir = getProjectDir();
+    expect(dir).toContain('projects');
+    expect(dir).toContain('-');
   });
 });

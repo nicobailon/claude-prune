@@ -39,46 +39,47 @@ bun install -g ccprune
 
 ## Quick Start
 
-1. **Find your Session ID** - In Claude Code, run `/status`:
-   ```
-   Session ID: 03953bb8-6855-4e53-a987-e11422a03fc6
-   ```
+1. **Quit Claude Code** - Press `Ctrl+C` or type `/quit`
 
-2. **Quit Claude Code** - Press `Ctrl+C` or type `/quit`
-
-3. **Run prune** from the same project directory:
+2. **Run prune** from the same project directory:
    ```bash
-   npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6
+   npx ccprune
    ```
 
-4. **Resume your session**:
-   ```bash
-   claude --resume 03953bb8-6855-4e53-a987-e11422a03fc6
-   ```
+3. **Press Enter** when prompted to resume your session.
+
+That's it! ccprune auto-detects your latest session and offers to resume it after pruning.
 
 ## Usage
 
 ```bash
-# Zero-config: defaults to keeping 20% of messages
+# Zero-config: auto-detects latest session, keeps 20% of messages
+ccprune
+
+# Pick from available sessions interactively
+ccprune --pick
+
+# Explicit session ID (if you need a specific session)
 ccprune <sessionId>
 
 # Explicit options
-ccprune <sessionId> --keep <number>
-ccprune <sessionId> --keep-percent <percent>
+ccprune --keep <number>
+ccprune --keep-percent <percent>
 
 # Subcommands
-ccprune prune <sessionId> [options]
 ccprune restore <sessionId> [--dry-run]
 ```
 
 ### Arguments
 
-- `sessionId`: UUID of the Claude Code session (find it via `/status` in Claude Code)
+- `sessionId`: (Optional) UUID of the Claude Code session. Auto-detects latest if omitted.
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
+| `--pick` | Interactively select from available sessions |
+| `--resume` | Automatically resume the session after pruning (skip prompt) |
 | `-k, --keep <number>` | Number of assistant messages to keep |
 | `-p, --keep-percent <number>` | Percentage of assistant messages to keep (1-100) |
 | `--dry-run` | Preview changes and summary without modifying files |
@@ -87,28 +88,37 @@ ccprune restore <sessionId> [--dry-run]
 | `-h, --help` | Show help information |
 | `-V, --version` | Show version number |
 
-If no option is specified, defaults to `--keep-percent 20`. If both `--keep` and `--keep-percent` are provided, `--keep` takes priority.
+If no session ID is provided, auto-detects the most recently modified session. If no keep option is specified, defaults to `--keep-percent 20`.
 
 ### Examples
 
 ```bash
-# Simplest: just session ID (keeps 20% by default, generates summary)
-npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6
+# Simplest: auto-detect latest session, keep 20%, generate summary
+npx ccprune
+
+# Prune and immediately resume (no prompt)
+npx ccprune --resume
+
+# Pick from available sessions interactively
+npx ccprune --pick
 
 # Keep the last 10 assistant messages
-npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
+npx ccprune --keep 10
 
-# Keep the latest 25% of assistant messages (prunes older 75%)
-npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep-percent 25
+# Keep the latest 25% of assistant messages
+npx ccprune --keep-percent 25
 
 # Preview what would be pruned (shows summary preview too)
-npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 5 --dry-run
+npx ccprune --dry-run
 
 # Skip summarization for faster pruning
-npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10 --no-summary
+npx ccprune --keep 10 --no-summary
 
-# Use a specific model for summarization (haiku is faster/cheaper)
-npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10 --summary-model haiku
+# Use haiku model for summarization (faster/cheaper)
+npx ccprune --summary-model haiku
+
+# Target a specific session by ID
+npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
 
 # Restore from the latest backup
 npx ccprune restore 03953bb8-6855-4e53-a987-e11422a03fc6

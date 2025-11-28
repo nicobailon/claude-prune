@@ -22,11 +22,13 @@ bun run test src/index.test.ts # Run a single test file
 bun run build                  # Build for distribution
 
 # Testing the CLI locally
-bun run src/index.ts prune <sessionId>                    # Zero-config: defaults to 20%
-bun run src/index.ts prune <sessionId> -k 10              # Prune by count (keep 10)
-bun run src/index.ts prune <sessionId> -p 25              # Prune by percentage (keep 25%)
-bun run src/index.ts prune <sessionId> -k 10 --no-summary # Skip summary
-bun run src/index.ts prune <sessionId> -k 10 --summary-model haiku  # Use haiku model
+bun run src/index.ts                                      # Auto-detect latest session, prune 20%
+bun run src/index.ts --pick                               # Interactive session picker
+bun run src/index.ts --resume                             # Prune and auto-resume session
+bun run src/index.ts <sessionId> -k 10                    # Prune specific session by count
+bun run src/index.ts <sessionId> -p 25                    # Prune by percentage (keep 25%)
+bun run src/index.ts --no-summary                         # Skip summary
+bun run src/index.ts --summary-model haiku                # Use haiku model
 bun run src/index.ts restore <sessionId>                  # Test restore command
 ./dist/index.js --help                                    # Test built CLI
 ```
@@ -67,6 +69,14 @@ Single-file CLI: all core logic in `src/index.ts` with functions exported for te
 - Returns summary starting with "Previously, we discussed..."
 - Result appended as `{ type: "user", isCompactSummary: true, message: {...} }` at end of session
 
+**`listSessions(projectDir)`** - Session discovery:
+- Lists all UUID-format `.jsonl` files in project directory
+- Filters out agent sessions (non-UUID filenames)
+- Returns sorted by modification time (newest first)
+- Includes id, path, modifiedAt, sizeKB for each session
+
+**`findLatestSession(projectDir)`** - Returns most recently modified session or null
+
 **`findLatestBackup(backupFiles, sessionId)`** - Backup discovery:
 - Filters by pattern `{sessionId}.jsonl.{timestamp}`
 - Filters out NaN timestamps, sorts descending
@@ -76,7 +86,10 @@ Single-file CLI: all core logic in `src/index.ts` with functions exported for te
 **Backup Strategy**: Creates backups in `prune-backup/` subdirectory as `{sessionId}.jsonl.{timestamp}` before modifications.
 
 **CLI Commands**:
-- `ccprune <sessionId>` - Zero-config: defaults to `--keep-percent 20`
+- `ccprune` - Auto-detect latest session, defaults to `--keep-percent 20`, prompts to resume after
+- `ccprune --pick` - Interactive session picker
+- `ccprune --resume` - Prune and auto-resume (skip prompt)
+- `ccprune <sessionId>` - Prune specific session
 - `ccprune <sessionId> -k <n>` - Prune by message count
 - `ccprune <sessionId> -p <percent>` - Prune by percentage (1-100)
 - `ccprune restore <sessionId>` - Restore from latest backup
