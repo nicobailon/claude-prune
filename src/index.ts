@@ -162,7 +162,6 @@ program
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
   .option("--summary-timeout <ms>", "max total time for summarization in ms (default: 360000)", parseInt)
-  .option("--activity-timeout <ms>", "max time without output before retry in ms (default: 90000)", parseInt)
   .action(pruneCommand);
 
 program
@@ -183,7 +182,6 @@ program
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
   .option("--summary-timeout <ms>", "max total time for summarization in ms (default: 360000)", parseInt)
-  .option("--activity-timeout <ms>", "max time without output before retry in ms (default: 90000)", parseInt)
   .action(pruneCommand);
 
 // Count assistant messages (for percentage calculation)
@@ -316,8 +314,6 @@ function getMessageTypeLabel(type: string): string {
   return 'Assistant';
 }
 
-const ACTIVITY_TIMEOUT_MS = 90000; // 90 seconds without output = stuck
-
 async function spawnClaudeAsync(
   args: string[],
   input: string,
@@ -330,9 +326,7 @@ async function spawnClaudeAsync(
     let stdout = '';
     let stderr = '';
     let timedOut = false;
-    let activityTimedOut = false;
     let killTimeoutId: ReturnType<typeof setTimeout> | null = null;
-    let lastActivityTime = Date.now();
 
     // Allow parent to track this child for cleanup
     onSpawn?.(child);
@@ -340,15 +334,6 @@ async function spawnClaudeAsync(
     const tickInterval = onTick ? setInterval(() => {
       onTick();
     }, 1000) : null;
-
-    // Activity timeout - detect stuck processes with no output
-    const activityCheckInterval = setInterval(() => {
-      if (Date.now() - lastActivityTime > ACTIVITY_TIMEOUT_MS) {
-        activityTimedOut = true;
-        console.log(chalk.yellow('\nNo activity for 90s, process appears stuck...'));
-        child.kill('SIGTERM');
-      }
-    }, 10000);
 
     const timeoutId = setTimeout(() => {
       timedOut = true;
@@ -361,12 +346,10 @@ async function spawnClaudeAsync(
     }, timeoutMs);
 
     child.stdout?.on('data', (data) => {
-      lastActivityTime = Date.now();
       stdout += data.toString();
     });
 
     child.stderr?.on('data', (data) => {
-      lastActivityTime = Date.now();
       stderr += data.toString();
     });
 
@@ -375,7 +358,6 @@ async function spawnClaudeAsync(
       clearTimeout(timeoutId);
       if (killTimeoutId) clearTimeout(killTimeoutId);
       if (tickInterval) clearInterval(tickInterval);
-      clearInterval(activityCheckInterval);
       child.kill('SIGTERM');
       reject(new Error(`Failed to write to Claude stdin: ${err.message}`));
     });
@@ -384,7 +366,6 @@ async function spawnClaudeAsync(
       clearTimeout(timeoutId);
       if (killTimeoutId) clearTimeout(killTimeoutId);
       if (tickInterval) clearInterval(tickInterval);
-      clearInterval(activityCheckInterval);
       if (err.code === 'ENOENT') {
         reject(new Error('Claude CLI not found. Make sure Claude Code is installed and the "claude" command is available.'));
       } else {
@@ -396,7 +377,6 @@ async function spawnClaudeAsync(
       clearTimeout(timeoutId);
       if (killTimeoutId) clearTimeout(killTimeoutId);
       if (tickInterval) clearInterval(tickInterval);
-      clearInterval(activityCheckInterval);
 
       if (timedOut) {
         const sizeKB = Math.round(input.length / 1024);
@@ -404,8 +384,6 @@ async function spawnClaudeAsync(
           `Summary generation timed out after ${timeoutMs / 1000}s (transcript: ${sizeKB}KB). ` +
           `Try: --summary-model haiku (faster) or --summary-timeout 600000 (10 min)`
         ));
-      } else if (activityTimedOut) {
-        reject(new Error('Process appeared stuck (no output for 90s). Retrying...'));
       } else if (signal) {
         reject(new Error(`Claude CLI was killed by signal ${signal}: ${stderr}`));
       } else if (code !== 0) {
@@ -421,8 +399,8 @@ async function spawnClaudeAsync(
 }
 
 // Chunking constants
-const CHUNK_SIZE = 80000;
-const MAX_SINGLE_PASS = 100000;
+const CHUNK_SIZE = 30000;
+const MAX_SINGLE_PASS = 30000;
 
 function splitIntoChunks(text: string, chunkSize: number): string[] {
   const chunks: string[] = [];
@@ -607,7 +585,7 @@ ${transcriptToSummarize}`;
 // ---------- Prune Command Wrapper ----------
 async function pruneCommand(
   sessionId: string | undefined,
-  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; activityTimeout?: number }
+  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number }
 ) {
   const projectDir = getProjectDir();
 

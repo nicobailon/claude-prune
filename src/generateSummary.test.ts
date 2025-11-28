@@ -103,7 +103,7 @@ describe('generateSummary', () => {
   });
 
   it('should handle large transcripts under default limit without chunking', async () => {
-    const longContent = 'A'.repeat(20000);
+    const longContent = 'A'.repeat(10000);
     const droppedMessages = [
       { type: 'user', content: longContent },
       { type: 'assistant', content: longContent }
@@ -390,14 +390,12 @@ describe('generateSummary', () => {
 
     const resultPromise = generateSummary([{ type: 'user', content: 'test' }]);
 
-    // Emit activity frequently to prevent activity timeout (90s)
-    // Advance in small increments and emit data before activity timeout triggers
-    for (let elapsed = 0; elapsed < 360000; elapsed += 5000) {
-      mock.stdout.emit('data', '.'); // Keep activity alive
-      vi.advanceTimersByTime(5000);
-    }
+    // Advance to just before timeout
+    vi.advanceTimersByTime(359999);
+    expect(mock.kill).not.toHaveBeenCalled();
 
-    // At 360000ms, should have been killed by main timeout
+    // Advance past timeout
+    vi.advanceTimersByTime(1);
     expect(mock.kill).toHaveBeenCalledWith('SIGTERM');
 
     mock.emit('close', null);
