@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { pruneSessionLines, findLatestBackup, getClaudeConfigDir, countAssistantMessages, extractMessageContent, generateUUID, listSessions, findLatestSession, getProjectDir } from './index.js';
+import { displayCelebration } from './stats.js';
 import { execSync } from 'child_process';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -968,5 +969,77 @@ describe('getProjectDir', () => {
     const dir = getProjectDir();
     expect(dir).toContain('projects');
     expect(dir).toContain('-');
+  });
+});
+
+describe('displayCelebration', () => {
+  it('should render celebration with correct stats', () => {
+    const result = displayCelebration({
+      sessionId: 'abc-123-456',
+      before: { lines: 100, assistantMsgs: 50, sizeKB: 200 },
+      after: { lines: 25, assistantMsgs: 10, sizeKB: 50 },
+      hasSummary: true
+    });
+
+    expect(result).toContain('SESSION PRUNED!');
+    expect(result).toContain('abc-123-456');
+    expect(result).toContain('75 (-75%)'); // Lines saved
+    expect(result).toContain('200KB → 50KB (-75%)'); // Size reduction
+    expect(result).toContain('50 → 10 (-80%)'); // Messages
+    expect(result).toContain('Summary generated');
+  });
+
+  it('should truncate long session IDs', () => {
+    const longId = 'a'.repeat(60);
+    const result = displayCelebration({
+      sessionId: longId,
+      before: { lines: 10, assistantMsgs: 5, sizeKB: 10 },
+      after: { lines: 5, assistantMsgs: 2, sizeKB: 5 },
+      hasSummary: false
+    });
+
+    expect(result).toContain('...');
+    expect(result).not.toContain(longId);
+  });
+
+  it('should handle zero division gracefully', () => {
+    const result = displayCelebration({
+      sessionId: 'test-123',
+      before: { lines: 0, assistantMsgs: 0, sizeKB: 0 },
+      after: { lines: 0, assistantMsgs: 0, sizeKB: 0 },
+      hasSummary: false
+    });
+
+    expect(result).toContain('0 (-0%)');
+    expect(result).not.toContain('Summary generated');
+  });
+
+  it('should include correct status line when summary not generated', () => {
+    const result = displayCelebration({
+      sessionId: 'test-123',
+      before: { lines: 10, assistantMsgs: 5, sizeKB: 10 },
+      after: { lines: 5, assistantMsgs: 2, sizeKB: 5 },
+      hasSummary: false
+    });
+
+    expect(result).toContain('Backup created');
+    expect(result).not.toContain('Summary generated');
+    expect(result).toContain('Ready to resume');
+  });
+
+  it('should use box-drawing characters', () => {
+    const result = displayCelebration({
+      sessionId: 'test',
+      before: { lines: 10, assistantMsgs: 5, sizeKB: 10 },
+      after: { lines: 5, assistantMsgs: 2, sizeKB: 5 },
+      hasSummary: true
+    });
+
+    expect(result).toContain('╔');
+    expect(result).toContain('═');
+    expect(result).toContain('╗');
+    expect(result).toContain('║');
+    expect(result).toContain('╚');
+    expect(result).toContain('╝');
   });
 });

@@ -153,3 +153,84 @@ export function countMessageTypes(lines: string[]): { user: number; assistant: n
 
   return counts;
 }
+
+export interface CelebrationStats {
+  sessionId: string;
+  before: {
+    lines: number;
+    assistantMsgs: number;
+    sizeKB: number;
+  };
+  after: {
+    lines: number;
+    assistantMsgs: number;
+    sizeKB: number;
+  };
+  hasSummary: boolean;
+}
+
+export function displayCelebration(stats: CelebrationStats): string {
+  const width = 78;
+
+  const linesSaved = stats.before.lines - stats.after.lines;
+  const linesPercent = stats.before.lines > 0
+    ? Math.round((linesSaved / stats.before.lines) * 100)
+    : 0;
+
+  const sizeSaved = stats.before.sizeKB - stats.after.sizeKB;
+  const sizePercent = stats.before.sizeKB > 0
+    ? Math.round((sizeSaved / stats.before.sizeKB) * 100)
+    : 0;
+
+  const msgSaved = stats.before.assistantMsgs - stats.after.assistantMsgs;
+  const msgPercent = stats.before.assistantMsgs > 0
+    ? Math.round((msgSaved / stats.before.assistantMsgs) * 100)
+    : 0;
+
+  const sessionDisplay = stats.sessionId.length > 50
+    ? stats.sessionId.slice(0, 47) + '...'
+    : stats.sessionId;
+
+  const lines: string[] = [];
+
+  lines.push(chalk.green('╔' + '═'.repeat(width) + '╗'));
+  lines.push(chalk.green('║') + ' '.repeat(width) + chalk.green('║'));
+
+  const title = '🎉 SESSION PRUNED! 🎉';
+  lines.push(chalk.green('║') + centerText(chalk.bold.green(title), width) + chalk.green('║'));
+
+  lines.push(chalk.green('║') + ' '.repeat(width) + chalk.green('║'));
+  lines.push(chalk.green('║') + centerText(chalk.yellow('⭐'), width) + chalk.green('║'));
+  lines.push(chalk.green('║') + centerText(chalk.yellow('/   \\'), width) + chalk.green('║'));
+  lines.push(chalk.green('║') + centerText(chalk.yellow('/     \\'), width) + chalk.green('║'));
+  lines.push(chalk.green('║') + centerText(chalk.yellow('/  ___  \\'), width) + chalk.green('║'));
+  lines.push(chalk.green('║') + centerText(chalk.yellow('|  |   |  |'), width) + chalk.green('║'));
+  lines.push(chalk.green('║') + centerText(chalk.yellow('|  |___|  |'), width) + chalk.green('║'));
+  lines.push(chalk.green('║') + centerText(chalk.yellow('|         |'), width) + chalk.green('║'));
+  lines.push(chalk.green('║') + centerText(chalk.yellow('\\       /'), width) + chalk.green('║'));
+  lines.push(chalk.green('║') + centerText(chalk.yellow('\\_____/'), width) + chalk.green('║'));
+  lines.push(chalk.green('║') + ' '.repeat(width) + chalk.green('║'));
+
+  const addStatLine = (content: string) => {
+    const padding = width - visualLength(content);
+    lines.push(chalk.green('║') + content + ' '.repeat(Math.max(0, padding)) + chalk.green('║'));
+  };
+
+  addStatLine('  ' + chalk.white('Session ID: ') + chalk.bold.yellow(sessionDisplay));
+  addStatLine('  ' + chalk.white('Lines Saved: ') + chalk.bold.green(`${linesSaved.toLocaleString()} (-${linesPercent}%)`));
+  addStatLine('  ' + chalk.white('Size Reduced: ') + chalk.bold.green(`${stats.before.sizeKB}KB → ${stats.after.sizeKB}KB (-${sizePercent}%)`));
+  addStatLine('  ' + chalk.white('Assistant Messages: ') + chalk.bold.green(`${stats.before.assistantMsgs} → ${stats.after.assistantMsgs} (-${msgPercent}%)`));
+
+  lines.push(chalk.green('║') + ' '.repeat(width) + chalk.green('║'));
+
+  const statusParts = ['Backup created'];
+  if (stats.hasSummary) statusParts.push('Summary generated');
+  statusParts.push('Ready to resume');
+  const statusLine = statusParts.join(' • ');
+  lines.push(chalk.green('║') + centerText(chalk.dim(statusLine), width) + chalk.green('║'));
+
+  lines.push(chalk.green('║') + ' '.repeat(width) + chalk.green('║'));
+  lines.push(chalk.green('╚' + '═'.repeat(width) + '╝'));
+
+  return lines.join('\n');
+}

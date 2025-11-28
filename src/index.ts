@@ -8,7 +8,7 @@ import ora from "ora";
 import { confirm, select } from "@clack/prompts";
 import { spawn } from "child_process";
 import { createSummaryProgress } from "./progress.js";
-import { formatOriginalStats, formatResultStats, countMessageTypes } from "./stats.js";
+import { formatOriginalStats, formatResultStats, countMessageTypes, displayCelebration } from "./stats.js";
 
 // ---------- Helper Functions ----------
 export function getClaudeConfigDir(): string {
@@ -486,8 +486,11 @@ async function pruneCommand(
       process.exit(1);
     }
 
-    console.log(chalk.dim(`Auto-selected latest session: ${latest.id}`));
-    console.log(chalk.dim(`  Modified: ${latest.modifiedAt.toLocaleString()} (${latest.sizeKB}KB)`));
+    console.log();
+    console.log(chalk.bold.cyan('SESSION'));
+    console.log(chalk.white('  ID: ') + chalk.bold.yellow(latest.id));
+    console.log(chalk.white('  Modified: ') + chalk.dim(latest.modifiedAt.toLocaleString()));
+    console.log(chalk.white('  Size: ') + chalk.dim(`${latest.sizeKB}KB`));
     console.log();
     sessionId = latest.id;
   }
@@ -513,12 +516,6 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
   if (opts.keepPercent !== undefined && (isNaN(opts.keepPercent) || opts.keepPercent < 1 || opts.keepPercent > 100)) {
     console.error(chalk.red('--keep-percent must be a number between 1 and 100'));
     process.exit(1);
-  }
-
-  // Confirmation via clack if not dry-run
-  if (!opts.dryRun && process.stdin.isTTY) {
-    const ok = await confirm({ message: chalk.yellow("Overwrite original file?"), initialValue: true });
-    if (!ok) process.exit(0);
   }
 
   const spinner = ora(`Reading ${file}`).start();
@@ -720,6 +717,30 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
   }));
   console.log();
   console.log(chalk.bold.green("Done:"), chalk.white(file));
+
+  // Show celebration before auto-resume
+  if (process.stdin.isTTY) {
+    console.log();
+    console.log(displayCelebration({
+      sessionId,
+      before: {
+        lines: lines.length,
+        assistantMsgs: msgCounts.assistant,
+        sizeKB: originalSizeKB
+      },
+      after: {
+        lines: outLines.length,
+        assistantMsgs: finalAssistantCount,
+        sizeKB: finalSizeKB
+      },
+      hasSummary: summaryGenerated || (summaryContent !== null)
+    }));
+
+    // Pause for 5 seconds if we're going to resume
+    if (opts.resume !== false) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
 
   if (process.stdin.isTTY && opts.resume !== false) {
     console.log(chalk.dim(`\nResuming: claude --resume ${sessionId}\n`));
