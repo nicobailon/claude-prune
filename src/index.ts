@@ -307,6 +307,27 @@ export function pruneSessionLines(lines: string[], keepN: number): { outLines: s
     }
   });
 
+  // Clean up orphaned tool_results in the first kept user message
+  // These reference tool_use blocks in dropped assistant messages
+  for (let i = 1; i < outLines.length; i++) {
+    try {
+      const obj = JSON.parse(outLines[i]);
+      if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
+        const filtered = obj.message.content.filter(
+          (block: any) => block.type !== 'tool_result'
+        );
+        if (filtered.length === 0) {
+          outLines.splice(i, 1);
+        } else if (filtered.length !== obj.message.content.length) {
+          obj.message.content = filtered;
+          outLines[i] = JSON.stringify(obj);
+        }
+        break;
+      }
+      if (MSG_TYPES.has(obj.type)) break;
+    } catch { /* skip non-JSON */ }
+  }
+
   return { outLines, kept, dropped, assistantCount: assistantIndexes.length, droppedMessages };
 }
 
@@ -969,14 +990,18 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
       hasSummary: summaryGenerated || (summaryContent !== null)
     }));
 
-    // Pause for 10 seconds if we're going to resume
+    // Countdown before auto-resume
     if (opts.resume !== false) {
-      await new Promise(resolve => setTimeout(resolve, 10000));
+      for (let i = 10; i > 0; i--) {
+        process.stdout.write(`\r${chalk.dim(`Auto-resuming session in ${i}s... (Ctrl+C to cancel)`)}`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      process.stdout.write('\r' + ' '.repeat(60) + '\r');
     }
   }
 
   if (process.stdin.isTTY && opts.resume !== false) {
-    console.log(chalk.dim(`\nResuming: claude --resume ${sessionId}\n`));
+    console.log(chalk.dim(`Resuming: claude --resume ${sessionId}\n`));
     const child = spawn('claude', ['--resume', sessionId], {
       stdio: 'inherit'
     });
