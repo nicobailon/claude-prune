@@ -24,7 +24,7 @@ bun run build                  # Build for distribution
 # Testing the CLI locally
 bun run src/index.ts                                      # Auto-detect latest session, prune 20%
 bun run src/index.ts --pick                               # Interactive session picker
-bun run src/index.ts --resume                             # Prune and auto-resume session
+bun run src/index.ts -n                                   # Prune only, don't resume
 bun run src/index.ts <sessionId> -k 10                    # Prune specific session by count
 bun run src/index.ts <sessionId> -p 25                    # Prune by percentage (keep 25%)
 bun run src/index.ts --no-summary                         # Skip summary
@@ -86,9 +86,9 @@ Single-file CLI: all core logic in `src/index.ts` with functions exported for te
 **Backup Strategy**: Creates backups in `prune-backup/` subdirectory as `{sessionId}.jsonl.{timestamp}` before modifications.
 
 **CLI Commands**:
-- `ccprune` - Auto-detect latest session, defaults to `--keep-percent 20`, prompts to resume after
+- `ccprune` - Auto-detect latest session, prune (20% default), and resume automatically
 - `ccprune --pick` - Interactive session picker
-- `ccprune --resume` - Prune and auto-resume (skip prompt)
+- `ccprune -n` / `--no-resume` - Prune only, don't resume
 - `ccprune <sessionId>` - Prune specific session
 - `ccprune <sessionId> -k <n>` - Prune by message count
 - `ccprune <sessionId> -p <percent>` - Prune by percentage (1-100)

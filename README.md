@@ -46,9 +46,7 @@ bun install -g ccprune
    npx ccprune
    ```
 
-3. **Press Enter** when prompted to resume your session.
-
-That's it! ccprune auto-detects your latest session and offers to resume it after pruning.
+That's it! ccprune auto-detects your latest session, prunes old messages (keeping a summary), and resumes automatically.
 
 ## Usage
 
@@ -79,7 +77,7 @@ ccprune restore <sessionId> [--dry-run]
 | Option | Description |
 |--------|-------------|
 | `--pick` | Interactively select from available sessions |
-| `--resume` | Automatically resume the session after pruning (skip prompt) |
+| `-n, --no-resume` | Skip automatic session resume |
 | `-k, --keep <number>` | Number of assistant messages to keep |
 | `-p, --keep-percent <number>` | Percentage of assistant messages to keep (1-100) |
 | `--dry-run` | Preview changes and summary without modifying files |
@@ -93,11 +91,11 @@ If no session ID is provided, auto-detects the most recently modified session. I
 ### Examples
 
 ```bash
-# Simplest: auto-detect latest session, keep 20%, generate summary
+# Simplest: auto-detect, prune, and resume automatically
 npx ccprune
 
-# Prune and immediately resume (no prompt)
-npx ccprune --resume
+# Prune only (don't resume)
+npx ccprune -n
 
 # Pick from available sessions interactively
 npx ccprune --pick

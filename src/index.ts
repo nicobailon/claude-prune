@@ -112,7 +112,7 @@ export function getProjectDir(): string {
 const program = new Command()
   .name("ccprune")
   .description("Prune early messages from a Claude Code session.jsonl file")
-  .version("2.3.0");
+  .version("2.3.1");
 
 program
   .command("prune")
@@ -121,7 +121,7 @@ program
   .option("-k, --keep <number>", "number of assistant messages to keep", parseInt)
   .option("-p, --keep-percent <number>", "percentage of assistant messages to keep (1-100)", parseInt)
   .option("--pick", "interactively select from available sessions")
-  .option("--resume", "automatically resume the session after pruning")
+  .option("-n, --no-resume", "skip automatic session resume")
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
@@ -141,7 +141,7 @@ program
   .option("-k, --keep <number>", "number of assistant messages to keep", parseInt)
   .option("-p, --keep-percent <number>", "percentage of assistant messages to keep (1-100)", parseInt)
   .option("--pick", "interactively select from available sessions")
-  .option("--resume", "automatically resume the session after pruning")
+  .option("-n, --no-resume", "skip automatic session resume")
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
@@ -700,31 +700,24 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
   console.log();
   console.log(chalk.bold.green("Done:"), chalk.white(file));
 
-  if (process.stdin.isTTY) {
-    const confirmResult = opts.resume || await confirm({
-      message: 'Resume this session now?',
-      initialValue: true
+  if (process.stdin.isTTY && opts.resume !== false) {
+    console.log(chalk.dim(`\nResuming: claude --resume ${sessionId}\n`));
+    const child = spawn('claude', ['--resume', sessionId], {
+      stdio: 'inherit'
     });
-
-    if (confirmResult === true) {
-      console.log(chalk.dim(`\nRunning: claude --resume ${sessionId}\n`));
-      const child = spawn('claude', ['--resume', sessionId], {
-        stdio: 'inherit'
-      });
-      child.on('error', (err: NodeJS.ErrnoException) => {
-        if (err.code === 'ENOENT') {
-          console.error(chalk.red('\nClaude CLI not found. Run manually:'));
-          console.error(chalk.white(`  claude --resume ${sessionId}`));
-        } else {
-          console.error(chalk.red(`\nFailed to start claude: ${err.message}`));
-        }
-        process.exit(1);
-      });
-      child.on('close', (code) => {
-        process.exit(code ?? 0);
-      });
-      return new Promise<void>(() => {});
-    }
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') {
+        console.error(chalk.red('\nClaude CLI not found. Run manually:'));
+        console.error(chalk.white(`  claude --resume ${sessionId}`));
+      } else {
+        console.error(chalk.red(`\nFailed to start claude: ${err.message}`));
+      }
+      process.exit(1);
+    });
+    child.on('close', (code) => {
+      process.exit(code ?? 0);
+    });
+    return new Promise<void>(() => {});
   }
 }
 
