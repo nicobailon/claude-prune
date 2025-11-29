@@ -1062,18 +1062,27 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
 
   if (process.stdin.isTTY && opts.resume !== false) {
     const cmd = opts.with || 'claude';
-    console.log(chalk.dim(`Resuming: ${cmd} --resume ${sessionId}\n`));
+    const fullCmd = `${cmd} --resume ${sessionId}`;
+    console.log(chalk.dim(`Resuming: ${fullCmd}\n`));
 
-    const child = spawn(cmd, ['--resume', sessionId], {
-      stdio: 'inherit',
-      shell: true,
-      detached: true
-    });
+    let child;
+    if (opts.with) {
+      const userShell = process.env.SHELL || '/bin/sh';
+      child = spawn(userShell, ['-ic', `exec ${fullCmd}`], {
+        stdio: 'inherit',
+        detached: true
+      });
+    } else {
+      child = spawn('claude', ['--resume', sessionId], {
+        stdio: 'inherit',
+        detached: true
+      });
+    }
 
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {
         console.error(chalk.red(`\n'${cmd}' not found. Run manually:`));
-        console.error(chalk.white(`  ${cmd} --resume ${sessionId}`));
+        console.error(chalk.white(`  ${fullCmd}`));
       } else {
         console.error(chalk.red(`\nFailed to start ${cmd}: ${err.message}`));
       }
