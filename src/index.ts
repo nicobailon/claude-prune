@@ -181,6 +181,38 @@ program
 // Count tokens in session (for token-based pruning)
 const MSG_TYPES = new Set(["user", "assistant", "system"]);
 
+function estimateContentTokens(content: unknown): number {
+  if (typeof content === 'string') {
+    return Math.ceil(content.length / 4);
+  }
+  if (Array.isArray(content)) {
+    let tokens = 0;
+    for (const block of content) {
+      if (typeof block !== 'object' || block === null) continue;
+      const b = block as Record<string, unknown>;
+      if (b.type === 'image') {
+        tokens += 4000;
+      } else if (b.type === 'text' && typeof b.text === 'string') {
+        tokens += Math.ceil((b.text as string).length / 4);
+      } else if (b.type === 'tool_result') {
+        if (typeof b.content === 'string') {
+          tokens += Math.ceil((b.content as string).length / 4);
+        } else if (Array.isArray(b.content)) {
+          tokens += estimateContentTokens(b.content);
+        }
+      } else if (b.type === 'tool_use') {
+        tokens += 50;
+      } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
+        tokens += Math.ceil((b.thinking as string).length / 4);
+      } else {
+        tokens += Math.ceil(JSON.stringify(block).length / 4);
+      }
+    }
+    return tokens;
+  }
+  return 0;
+}
+
 export function countSessionTokens(lines: string[]): { total: number, perLine: Map<number, number> } {
   let total = 0;
   const perLine = new Map<number, number>();
@@ -194,7 +226,7 @@ export function countSessionTokens(lines: string[]): { total: number, perLine: M
         const content = obj.message?.content;
         const tokens = usage?.output_tokens
           ?? usage?.input_tokens
-          ?? (typeof content === 'string' ? Math.ceil(content.length / 4) : 0);
+          ?? estimateContentTokens(content);
         perLine.set(i, tokens);
         total += tokens;
       }
