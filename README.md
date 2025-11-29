@@ -92,6 +92,7 @@ ccprune restore <sessionId> [--dry-run]
 |--------|-------------|
 | `--pick` | Interactively select from available sessions |
 | `-n, --no-resume` | Skip automatic session resume |
+| `--with <command>` | Command for auto-resume (default: claude) |
 | `-k, --keep <number>` | Number of assistant messages to keep |
 | `-p, --keep-percent <number>` | Percentage of assistant messages to keep (1-100) |
 | `--dry-run` | Preview changes and summary without modifying files |
@@ -118,6 +119,9 @@ npx ccprune
 
 # Prune only (don't resume)
 npx ccprune -n
+
+# Resume with custom command (e.g., alias with --dangerously-skip-permissions)
+npx ccprune --with claude-yolo
 
 # Pick from available sessions interactively
 npx ccprune --pick

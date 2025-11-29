@@ -164,6 +164,7 @@ program
   .option("-p, --keep-percent <number>", "percentage of assistant messages to keep (1-100)", parseInt)
   .option("--pick", "interactively select from available sessions")
   .option("-n, --no-resume", "skip automatic session resume")
+  .option("--with <command>", "command for auto-resume (default: claude)")
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
@@ -660,7 +661,7 @@ ${transcriptToSummarize}`;
 // ---------- Prune Command Wrapper ----------
 async function pruneCommand(
   sessionId: string | undefined,
-  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; claudeCode?: boolean }
+  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; claudeCode?: boolean; with?: string }
 ) {
   // Auto-detect GEMINI_API_KEY and default to Gemini Flash
   // Priority: --claude-code > --gemini > --gemini-flash > auto-detect > fallback to Claude Code
@@ -750,7 +751,7 @@ async function pruneCommand(
 }
 
 // ---------- Main ----------
-async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean }) {
+async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; with?: string }) {
   const cwdProject = process.cwd().replace(/[\/\.]/g, '-');
   const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
 
@@ -1060,23 +1061,27 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
   }
 
   if (process.stdin.isTTY && opts.resume !== false) {
-    console.log(chalk.dim(`Resuming: claude --resume ${sessionId}\n`));
-    const child = spawn('claude', ['--resume', sessionId], {
-      stdio: 'inherit'
+    const cmd = opts.with || 'claude';
+    console.log(chalk.dim(`Resuming: ${cmd} --resume ${sessionId}\n`));
+
+    const child = spawn(cmd, ['--resume', sessionId], {
+      stdio: 'inherit',
+      shell: true,
+      detached: true
     });
+
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {
-        console.error(chalk.red('\nClaude CLI not found. Run manually:'));
-        console.error(chalk.white(`  claude --resume ${sessionId}`));
+        console.error(chalk.red(`\n'${cmd}' not found. Run manually:`));
+        console.error(chalk.white(`  ${cmd} --resume ${sessionId}`));
       } else {
-        console.error(chalk.red(`\nFailed to start claude: ${err.message}`));
+        console.error(chalk.red(`\nFailed to start ${cmd}: ${err.message}`));
       }
       process.exit(1);
     });
-    child.on('close', (code) => {
-      process.exit(code ?? 0);
-    });
-    return new Promise<void>(() => {});
+
+    child.unref();
+    process.exit(0);
   }
 }
 
