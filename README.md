@@ -6,8 +6,9 @@ Next time your Claude Code context is running low, just quit cc then run `npx cc
 
 ## Features
 
-- **Zero-Config Default**: Just run `ccprune` - auto-detects latest session, keeps 20% of messages
-- **Smart Pruning**: Keep messages by count (`--keep 10`) or percentage (`--keep-percent 25`)
+- **Zero-Config Default**: Just run `ccprune` - auto-detects latest session, keeps 55K tokens
+- **Token-Based Pruning**: Prunes based on actual token count, not message count
+- **Smart Threshold**: Automatically skips pruning if session is under 55K tokens
 - **AI Summarization**: Automatically generates a summary of pruned content (enabled by default)
 - **Summary Synthesis**: Re-pruning synthesizes old summary + new pruned content into one cohesive summary
 - **Small Session Warning**: Prompts for confirmation when auto-selecting sessions with < 5 messages
@@ -65,7 +66,7 @@ With `GEMINI_API_KEY` set, ccprune automatically uses Gemini 2.5 Flash for fast 
 ## Usage
 
 ```bash
-# Zero-config: auto-detects latest session, keeps 20% of messages
+# Zero-config: auto-detects latest session, keeps 55K tokens
 ccprune
 
 # Pick from available sessions interactively
@@ -74,9 +75,9 @@ ccprune --pick
 # Explicit session ID (if you need a specific session)
 ccprune <sessionId>
 
-# Explicit options
-ccprune --keep <number>
-ccprune --keep-percent <percent>
+# Explicit token limit
+ccprune --keep 40000
+ccprune --keep-tokens 80000
 
 # Subcommands
 ccprune restore <sessionId> [--dry-run]
@@ -93,8 +94,8 @@ ccprune restore <sessionId> [--dry-run]
 | `--pick` | Interactively select from available sessions |
 | `-n, --no-resume` | Skip automatic session resume |
 | `--yolo` | Resume with `--dangerously-skip-permissions` |
-| `-k, --keep <number>` | Number of assistant messages to keep |
-| `-p, --keep-percent <number>` | Percentage of assistant messages to keep (1-100) |
+| `-k, --keep <number>` | Number of tokens to retain (default: 55000) |
+| `--keep-tokens <number>` | Number of tokens to retain (alias for `-k`) |
 | `--dry-run` | Preview changes and summary without modifying files |
 | `--no-summary` | Skip AI summarization of pruned messages |
 | `--summary-model <model>` | Model for summarization (haiku, sonnet, or full name) |
@@ -105,7 +106,7 @@ ccprune restore <sessionId> [--dry-run]
 | `-h, --help` | Show help information |
 | `-V, --version` | Show version number |
 
-If no session ID is provided, auto-detects the most recently modified session. If no keep option is specified, defaults to `--keep-percent 20`.
+If no session ID is provided, auto-detects the most recently modified session. If no keep option is specified, defaults to 55,000 tokens.
 
 **Default summarization:**
 - With `GEMINI_API_KEY` set: Gemini 2.5 Flash (fast, no chunking)
@@ -126,17 +127,17 @@ npx ccprune --yolo
 # Pick from available sessions interactively
 npx ccprune --pick
 
-# Keep the last 10 assistant messages
-npx ccprune --keep 10
+# Keep 40K tokens (more aggressive pruning)
+npx ccprune --keep 40000
 
-# Keep the latest 25% of assistant messages
-npx ccprune --keep-percent 25
+# Keep 80K tokens (less aggressive pruning)
+npx ccprune --keep-tokens 80000
 
 # Preview what would be pruned (shows summary preview too)
 npx ccprune --dry-run
 
 # Skip summarization for faster pruning
-npx ccprune --keep 10 --no-summary
+npx ccprune --keep 55000 --no-summary
 
 # Use Claude Code CLI with haiku model (faster/cheaper)
 npx ccprune --claude-code --summary-model haiku
@@ -151,7 +152,7 @@ npx ccprune --gemini-flash
 npx ccprune --claude-code
 
 # Target a specific session by ID
-npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 10
+npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 40000
 
 # Restore from the latest backup
 npx ccprune restore 03953bb8-6855-4e53-a987-e11422a03fc6
@@ -178,15 +179,18 @@ BEFORE                 AFTER FIRST PRUNE           AFTER RE-PRUNE
 ```
 
 1. **Locates Session File**: Finds `$CLAUDE_CONFIG_DIR/projects/{project-path}/{sessionId}.jsonl`
-2. **Preserves Critical Data**: Always keeps the first line (file-history-snapshot or session metadata)
-3. **Smart Pruning**: Finds the Nth-to-last assistant message and keeps everything from that point forward
-4. **Content Extraction**: Extracts text from messages, including `tool_result` outputs and `thinking` blocks. Tool calls become `[Used tool: ToolName]` placeholders to provide context without verbose tool I/O
-5. **Orphan Cleanup**: Removes `tool_result` blocks in kept messages that reference `tool_use` blocks from pruned messages
-6. **AI Summarization**: Generates a structured summary with sections: Overview, What Was Accomplished, Files Modified, Key Technical Details, Current State & Pending Work
-7. **Summary Synthesis**: Re-pruning synthesizes old summary + new pruned content into one cohesive summary
-8. **Chunked Summarization**: Large transcripts (>30KB) are chunked and summarized in parts when using `--claude-code`
-9. **Safe Backup**: Creates timestamped backup in `prune-backup/` before modifying
-10. **Auto-Resume**: Optionally resumes Claude Code session after pruning
+2. **Counts Tokens**: Calculates total tokens in session using `message.usage.output_tokens` (with content-based fallback)
+3. **Early Exit**: If total tokens ≤ threshold (55K default), skips pruning and auto-resumes
+4. **Preserves Critical Data**: Always keeps the first line (file-history-snapshot or session metadata)
+5. **Token-Based Cutoff**: Scans right-to-left, accumulating tokens until reaching threshold, then prunes everything before that point
+6. **Lenient Boundary**: Includes one extra message at the boundary to preserve more context
+7. **Content Extraction**: Extracts text from messages, including `tool_result` outputs and `thinking` blocks. Tool calls become `[Used tool: ToolName]` placeholders to provide context without verbose tool I/O
+8. **Orphan Cleanup**: Removes `tool_result` blocks in kept messages that reference `tool_use` blocks from pruned messages
+9. **AI Summarization**: Generates a structured summary with sections: Overview, What Was Accomplished, Files Modified, Key Technical Details, Current State & Pending Work
+10. **Summary Synthesis**: Re-pruning synthesizes old summary + new pruned content into one cohesive summary
+11. **Chunked Summarization**: Large transcripts (>30KB) are chunked and summarized in parts when using `--claude-code`
+12. **Safe Backup**: Creates timestamped backup in `prune-backup/` before modifying
+13. **Auto-Resume**: Optionally resumes Claude Code session after pruning
 
 ## File Structure
 
@@ -225,26 +229,29 @@ Use `--gemini` for Gemini 3 Pro, or `--claude-code` to force Claude Code CLI.
 
 ## Migrating from claude-prune
 
-If you were using the original `claude-prune` package, `ccprune` v2.x has these changes:
+If you were using the original `claude-prune` package, `ccprune` v3.x has these changes:
 
 ```bash
-# claude-prune v1.x (summary was opt-in, -k required)
+# claude-prune v1.x (message-count based, summary was opt-in)
 claude-prune <id> -k 10 --summarize-pruned
 
-# ccprune v2.x (zero-config default, summary enabled by default)
-ccprune <id>                    # defaults to 20%, includes summary
-ccprune <id> -k 10              # explicit count, includes summary
-ccprune <id> -k 10 --no-summary # skips summary
+# ccprune v2.x (percentage-based, summary enabled by default)
+ccprune <id>                    # defaults to 20% of messages
+ccprune <id> --keep-percent 25  # keep latest 25% of messages
 
-# New in ccprune: percentage-based pruning
-ccprune <id> --keep-percent 25  # keep latest 25%
+# ccprune v3.x (token-based, summary enabled by default)
+ccprune <id>                    # defaults to 55K tokens
+ccprune <id> -k 40000           # keep 40K tokens
+ccprune <id> --keep-tokens 80000 # keep 80K tokens
 ```
 
-**Key changes:**
-- `-k` or `-p` flags are now optional (defaults to `--keep-percent 20`)
+**Key changes in v3.x:**
+- **Token-based pruning**: `-k` now means tokens, not message count
+- **Removed**: `-p, --keep-percent` flag (replaced by token-based approach)
+- **Auto-skip**: Sessions under 55K tokens are not pruned
+- **Lenient boundary**: Includes one extra message at the boundary to preserve context
 - Summary is enabled by default (use `--no-summary` to disable)
 - Re-pruning synthesizes old summary + new pruned content into one summary
-- `--summarize-pruned` flag removed (summary is always on unless `--no-summary`)
 
 ## Development
 

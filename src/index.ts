@@ -158,10 +158,12 @@ program
   .action(restore);
 
 // Default command - prune session
+const DEFAULT_KEEP_TOKENS = 55000;
+
 program
   .argument("[sessionId]", "UUID of the session (auto-detects latest if omitted)")
-  .option("-k, --keep <number>", "number of assistant messages to keep", parseInt)
-  .option("-p, --keep-percent <number>", "percentage of assistant messages to keep (1-100)", parseInt)
+  .option("-k, --keep <number>", "tokens to retain (default: 55000)", parseInt)
+  .option("--keep-tokens <number>", "tokens to retain (alias for -k)", parseInt)
   .option("--pick", "interactively select from available sessions")
   .option("-n, --no-resume", "skip automatic session resume")
   .option("--yolo", "resume with --dangerously-skip-permissions")
@@ -176,28 +178,52 @@ program
     return pruneCommand(sessionId, this.opts());
   });
 
-// Count assistant messages (for percentage calculation)
+// Count tokens in session (for token-based pruning)
+const MSG_TYPES = new Set(["user", "assistant", "system"]);
+
+export function countSessionTokens(lines: string[]): { total: number, perLine: Map<number, number> } {
+  let total = 0;
+  const perLine = new Map<number, number>();
+
+  lines.forEach((line, i) => {
+    if (i === 0) return;
+    try {
+      const obj = JSON.parse(line);
+      if (MSG_TYPES.has(obj.type)) {
+        const usage = obj.message?.usage;
+        const content = obj.message?.content;
+        const tokens = usage?.output_tokens
+          ?? usage?.input_tokens
+          ?? (typeof content === 'string' ? Math.ceil(content.length / 4) : 0);
+        perLine.set(i, tokens);
+        total += tokens;
+      }
+    } catch {}
+  });
+
+  return { total, perLine };
+}
+
+// Count assistant messages (for stats display)
 export function countAssistantMessages(lines: string[]): number {
   let count = 0;
   for (let i = 1; i < lines.length; i++) {
     try {
       const { type } = JSON.parse(lines[i]);
       if (type === 'assistant') count++;
-    } catch { /* skip non-JSON */ }
+    } catch {}
   }
   return count;
 }
 
 // Extract core logic for testing
-export function pruneSessionLines(lines: string[], keepN: number): { outLines: string[], kept: number, dropped: number, assistantCount: number, droppedMessages: { type: string, content: string, isSummary?: boolean }[] } {
-  // Define message types to track and prune. Tool results and other lines are always kept.
-  const MSG_TYPES = new Set(["user", "assistant", "system"]);
+export function pruneSessionLines(lines: string[], keepTokens: number): { outLines: string[], kept: number, dropped: number, assistantCount: number, keptTokens: number, droppedTokens: number, droppedMessages: { type: string, content: string, isSummary?: boolean }[] } {
+  const { total: totalTokens, perLine } = countSessionTokens(lines);
   const msgIndexes: number[] = [];
   const assistantIndexes: number[] = [];
 
-  // Pass 1 – locate message objects (skip first line entirely)
   lines.forEach((ln, i) => {
-    if (i === 0) return; // Always preserve first item
+    if (i === 0) return;
     try {
       const { type } = JSON.parse(ln);
       if (MSG_TYPES.has(type)) {
@@ -206,25 +232,30 @@ export function pruneSessionLines(lines: string[], keepN: number): { outLines: s
           assistantIndexes.push(i);
         }
       }
-    } catch { /* non-JSON diagnostic line – keep as-is */ }
+    } catch {}
   });
 
-  const keepNSafe = Math.max(0, keepN);
+  // Find cutoff by scanning right-to-left until we accumulate keepTokens
+  let accumulated = 0;
+  let cutFrom = 0;
 
-  // Find the cutoff point based on last N assistant messages
-  // cutFrom = Infinity means drop all messages (keepN=0 case)
-  // cutFrom = 0 means keep all messages (keepN >= assistantCount case)
-  let cutFrom: number = 0;
-  if (keepNSafe === 0) {
-    cutFrom = Infinity; // Drop all messages
-  } else if (assistantIndexes.length > keepNSafe) {
-    cutFrom = assistantIndexes[assistantIndexes.length - keepNSafe];
+  for (let i = lines.length - 1; i >= 1; i--) {
+    const tokens = perLine.get(i) ?? 0;
+    if (tokens > 0) {
+      if (accumulated + tokens > keepTokens && (accumulated > 0 || keepTokens <= 0)) {
+        cutFrom = i + 1;
+        break;
+      }
+      accumulated += tokens;
+    }
   }
 
   // Pass 2 – build pruned output
   const outLines: string[] = [];
   let kept = 0;
   let dropped = 0;
+  let keptTokens = 0;
+  let droppedTokens = 0;
   const droppedMessages: { type: string, content: string, isSummary?: boolean }[] = [];
 
   // Always include first line
@@ -275,11 +306,14 @@ export function pruneSessionLines(lines: string[], keepN: number): { outLines: s
     
     const isMsg = MSG_TYPES.has(objType);
     if (isMsg) {
-      if (idx >= cutFrom) { 
-        kept++; 
-        outLines.push(ln); 
+      const msgTokens = perLine.get(idx) ?? 0;
+      if (idx >= cutFrom) {
+        kept++;
+        keptTokens += msgTokens;
+        outLines.push(ln);
       } else {
         dropped++;
+        droppedTokens += msgTokens;
         const { type, message, isCompactSummary } = parsedObj;
         if (message?.content !== undefined) {
           const contentStr = extractMessageContent(message.content);
@@ -287,7 +321,7 @@ export function pruneSessionLines(lines: string[], keepN: number): { outLines: s
         }
       }
     } else {
-      outLines.push(ln); // always keep tool lines, etc.
+      outLines.push(ln);
     }
   });
 
@@ -312,7 +346,7 @@ export function pruneSessionLines(lines: string[], keepN: number): { outLines: s
     } catch { /* skip non-JSON */ }
   }
 
-  return { outLines, kept, dropped, assistantCount: assistantIndexes.length, droppedMessages };
+  return { outLines, kept, dropped, assistantCount: assistantIndexes.length, keptTokens, droppedTokens, droppedMessages };
 }
 
 // Only run CLI if not in test environment
@@ -661,8 +695,12 @@ ${transcriptToSummarize}`;
 // ---------- Prune Command Wrapper ----------
 async function pruneCommand(
   sessionId: string | undefined,
-  opts: { keep?: number; keepPercent?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; claudeCode?: boolean; yolo?: boolean }
+  opts: { keep?: number; keepTokens?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; claudeCode?: boolean; yolo?: boolean }
 ) {
+  // Merge --keep-tokens into --keep (alias)
+  if (opts.keepTokens !== undefined) {
+    opts.keep = opts.keepTokens;
+  }
   // Auto-detect GEMINI_API_KEY and default to Gemini Flash
   // Priority: --claude-code > --gemini > --gemini-flash > auto-detect > fallback to Claude Code
   if (!opts.claudeCode && !opts.gemini && !opts.geminiFlash) {
@@ -719,12 +757,14 @@ async function pruneCommand(
     const sessionContent = await fs.readFile(latest.path, 'utf-8');
     const sessionLines = sessionContent.split('\n').filter(l => l.trim());
     const assistantCount = countAssistantMessages(sessionLines);
+    const { total: totalTokens } = countSessionTokens(sessionLines);
 
     console.log();
     console.log(chalk.bold.cyan('SESSION'));
     console.log(chalk.white('  ID: ') + chalk.bold.yellow(latest.id));
     console.log(chalk.white('  Modified: ') + chalk.dim(latest.modifiedAt.toLocaleString()));
     console.log(chalk.white('  Size: ') + chalk.dim(`${latest.sizeKB}KB`));
+    console.log(chalk.white('  Tokens: ') + chalk.dim(`${totalTokens.toLocaleString()}`));
     console.log(chalk.white('  Messages: ') + chalk.dim(`${assistantCount} assistant`));
     console.log();
 
@@ -751,7 +791,7 @@ async function pruneCommand(
 }
 
 // ---------- Main ----------
-async function main(sessionId: string, opts: { keep?: number; keepPercent?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; yolo?: boolean }) {
+async function main(sessionId: string, opts: { keep?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; yolo?: boolean }) {
   const cwdProject = process.cwd().replace(/[\/\.]/g, '-');
   const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
 
@@ -765,33 +805,79 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
     process.exit(1);
   }
 
-  if (opts.keepPercent !== undefined && (isNaN(opts.keepPercent) || opts.keepPercent < 1 || opts.keepPercent > 100)) {
-    console.error(chalk.red('--keep-percent must be a number between 1 and 100'));
-    process.exit(1);
-  }
-
   const spinner = ora(`Reading ${file}`).start();
   const raw = await fs.readFile(file, "utf8");
   const lines = raw.split(/\r?\n/).filter(Boolean);
 
-  let keepN = opts.keep;
-  let percentInfo = '';
-  if (keepN === undefined && opts.keepPercent !== undefined) {
-    const totalAssistant = countAssistantMessages(lines);
-    keepN = Math.max(1, Math.ceil(totalAssistant * opts.keepPercent / 100));
-    percentInfo = ` (${opts.keepPercent}% of ${totalAssistant})`;
-  }
-
-  if (keepN === undefined) {
-    const totalAssistant = countAssistantMessages(lines);
-    keepN = Math.max(1, Math.ceil(totalAssistant * 20 / 100));
-    percentInfo = ` (default 20% of ${totalAssistant})`;
-  }
+  const keepTokens = opts.keep ?? DEFAULT_KEEP_TOKENS;
+  const { total: totalTokens } = countSessionTokens(lines);
 
   const originalSizeKB = Math.round(raw.length / 1024);
   const msgCounts = countMessageTypes(lines);
 
   spinner.succeed(`${chalk.green("Scanned")} ${file}`);
+
+  // Early exit if under threshold
+  if (totalTokens <= keepTokens) {
+    console.log();
+    console.log(chalk.green(`Session has ${totalTokens.toLocaleString()} tokens (under ${keepTokens.toLocaleString()} threshold) - no compaction needed`));
+    console.log();
+
+    // Skip to auto-resume
+    if (process.stdin.isTTY && opts.resume !== false) {
+      const barWidth = 50;
+      const spinnerChars = ['\u280B', '\u2819', '\u2839', '\u2838', '\u283C', '\u2834', '\u2826', '\u2827', '\u2807', '\u280F'];
+      let spinnerIndex = 0;
+
+      for (let i = 5; i > 0; i--) {
+        const spinChar = spinnerChars[spinnerIndex % spinnerChars.length];
+        const progress = (5 - i) / 5;
+        const filled = Math.floor(progress * barWidth);
+        const progressBar = chalk.green('\u2588'.repeat(filled)) + chalk.gray('\u2591'.repeat(barWidth - filled));
+
+        const percentage = Math.floor(progress * 100);
+        const timeDisplay = i === 1 ? '1 second ' : `${i} seconds`;
+
+        process.stdout.write('\r' + ' '.repeat(80) + '\r');
+        process.stdout.write(
+          `  ${chalk.cyan(spinChar)} ` +
+          chalk.yellow('RESUMING IN... ') +
+          `[${progressBar}] ` +
+          chalk.bold.white(`${percentage}% `) +
+          chalk.yellow(`(${timeDisplay} remaining) `) +
+          chalk.dim('Press Ctrl+C to cancel')
+        );
+
+        spinnerIndex++;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      process.stdout.write('\r' + ' '.repeat(80) + '\r');
+      console.log(chalk.bold.green('  RESUMING SESSION NOW!\n'));
+
+      const args = opts.yolo
+        ? ['--dangerously-skip-permissions', '--resume', sessionId]
+        : ['--resume', sessionId];
+
+      console.log(chalk.dim(`Resuming: claude ${args.join(' ')}\n`));
+
+      const child = spawn('claude', args, { stdio: 'inherit' });
+
+      child.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'ENOENT') {
+          console.error(chalk.red(`\n'claude' not found. Run manually:`));
+          console.error(chalk.white(`  claude ${args.join(' ')}`));
+        } else {
+          console.error(chalk.red(`\nFailed to start claude: ${err.message}`));
+        }
+        process.exit(1);
+      });
+
+      child.on('close', (code) => process.exit(code ?? 0));
+    }
+    return;
+  }
+
   console.log();
   console.log(formatOriginalStats({
     lines: lines.length,
@@ -802,8 +888,8 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
   }));
   console.log();
 
-  const { outLines, kept, dropped, droppedMessages } = pruneSessionLines(lines, keepN);
-  console.log(chalk.dim(`Keeping ${keepN} assistant messages${percentInfo} (${kept} lines kept, ${dropped} dropped)`));
+  const { outLines, kept, dropped, keptTokens, droppedTokens, droppedMessages } = pruneSessionLines(lines, keepTokens);
+  console.log(chalk.dim(`Keeping ${keptTokens.toLocaleString()} tokens (target: ${keepTokens.toLocaleString()}) - ${kept} messages kept, ${dropped} dropped`));
 
   // Check if there's an existing summary in the KEPT portion that needs synthesis
   // This happens when the old summary is near the end and falls within the kept range
@@ -1067,10 +1153,7 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
 
     console.log(chalk.dim(`Resuming: claude ${args.join(' ')}\n`));
 
-    const child = spawn('claude', args, {
-      stdio: 'inherit',
-      detached: true
-    });
+    const child = spawn('claude', args, { stdio: 'inherit' });
 
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {
@@ -1082,8 +1165,7 @@ async function main(sessionId: string, opts: { keep?: number; keepPercent?: numb
       process.exit(1);
     });
 
-    child.unref();
-    process.exit(0);
+    child.on('close', (code) => process.exit(code ?? 0));
   }
 }
 
