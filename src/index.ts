@@ -148,7 +148,7 @@ export function getProjectDir(): string {
 const program = new Command()
   .name("ccprune")
   .description("Prune early messages from a Claude Code session.jsonl file")
-  .version("4.0.0");
+  .version("4.1.0");
 
 program
   .command("restore")
@@ -158,11 +158,11 @@ program
   .action(restore);
 
 // Default command - prune session
-const DEFAULT_KEEP_TOKENS = 55000;
+const DEFAULT_KEEP_TOKENS = 40000;
 
 program
   .argument("[sessionId]", "UUID of the session (auto-detects latest if omitted)")
-  .option("-k, --keep <number>", "tokens to retain (default: 55000)", parseInt)
+  .option("-k, --keep <number>", "tokens to retain (default: 40000)", parseInt)
   .option("--keep-tokens <number>", "tokens to retain (alias for -k)", parseInt)
   .option("--pick", "interactively select from available sessions")
   .option("-n, --no-resume", "skip automatic session resume")
