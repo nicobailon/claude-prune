@@ -148,7 +148,7 @@ export function getProjectDir(): string {
 const program = new Command()
   .name("ccprune")
   .description("Prune early messages from a Claude Code session.jsonl file")
-  .version("4.1.0");
+  .version("4.1.1");
 
 program
   .command("restore")
@@ -409,6 +409,30 @@ export function pruneSessionLines(lines: string[], keepTokens: number): { outLin
       }
       if (MSG_TYPES.has(obj.type)) break;
     } catch { /* skip non-JSON */ }
+  }
+
+  // Update leafUuid in first line to point to last message
+  if (outLines.length > 1) {
+    let lastMsgUuid: string | null = null;
+    for (let i = outLines.length - 1; i >= 1; i--) {
+      try {
+        const obj = JSON.parse(outLines[i]);
+        if (MSG_TYPES.has(obj.type) && obj.uuid) {
+          lastMsgUuid = obj.uuid;
+          break;
+        }
+      } catch {}
+    }
+
+    if (lastMsgUuid) {
+      try {
+        const firstLine = JSON.parse(outLines[0]);
+        if (firstLine.type === 'summary' && firstLine.leafUuid) {
+          firstLine.leafUuid = lastMsgUuid;
+          outLines[0] = JSON.stringify(firstLine);
+        }
+      } catch {}
+    }
   }
 
   return { outLines, kept, dropped, assistantCount: assistantIndexes.length, keptTokens, droppedTokens, droppedMessages };

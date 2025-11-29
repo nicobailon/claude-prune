@@ -228,6 +228,48 @@ describe('pruneSessionLines', () => {
     expect(outLines.some(l => l.includes('isCompactSummary'))).toBe(true);
     expect(droppedMessages).toHaveLength(0);
   });
+
+  it('updates leafUuid in first line to match last message uuid', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "old-uuid", summary: "test" }),
+      JSON.stringify({ type: "user", uuid: "u1", parentUuid: null, message: { content: "msg1" } }),
+      JSON.stringify({ type: "assistant", uuid: "a1", parentUuid: "u1", message: { content: "response1", usage: { output_tokens: 100 } } }),
+      JSON.stringify({ type: "user", uuid: "u2", parentUuid: "a1", message: { content: "msg2" } }),
+      JSON.stringify({ type: "assistant", uuid: "a2", parentUuid: "u2", message: { content: "response2", usage: { output_tokens: 100 } } }),
+    ];
+
+    const { outLines } = pruneSessionLines(lines, 150);
+    const firstLine = JSON.parse(outLines[0]);
+
+    // Find the last message in outLines
+    let lastMsgUuid: string | null = null;
+    for (let i = outLines.length - 1; i >= 1; i--) {
+      try {
+        const obj = JSON.parse(outLines[i]);
+        if (['user', 'assistant', 'system'].includes(obj.type) && obj.uuid) {
+          lastMsgUuid = obj.uuid;
+          break;
+        }
+      } catch {}
+    }
+
+    expect(firstLine.leafUuid).toBe(lastMsgUuid);
+    expect(firstLine.leafUuid).not.toBe("old-uuid");
+  });
+
+  it('preserves leafUuid when no messages are pruned', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a2", summary: "test" }),
+      JSON.stringify({ type: "user", uuid: "u1", message: { content: "msg1" } }),
+      JSON.stringify({ type: "assistant", uuid: "a2", message: { content: "response", usage: { output_tokens: 50 } } }),
+    ];
+
+    const { outLines } = pruneSessionLines(lines, 99999);
+    const firstLine = JSON.parse(outLines[0]);
+
+    // leafUuid should still point to last message (which is a2)
+    expect(firstLine.leafUuid).toBe("a2");
+  });
 });
 
 describe('execSync error handling', () => {
