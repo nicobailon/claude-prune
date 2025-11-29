@@ -1,6 +1,6 @@
 {
   "name": "ccprune",
-  "version": "2.6.1",
+  "version": "2.6.2",
   "description": "Prune early messages from Claude Code session transcripts with AI summarization",
   "author": "Nico Bailon",
   "license": "MIT",
