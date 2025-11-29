@@ -148,7 +148,7 @@ export function getProjectDir(): string {
 const program = new Command()
   .name("ccprune")
   .description("Prune early messages from a Claude Code session.jsonl file")
-  .version("3.0.1");
+  .version("4.0.0");
 
 program
   .command("restore")
@@ -167,6 +167,7 @@ program
   .option("--pick", "interactively select from available sessions")
   .option("-n, --no-resume", "skip automatic session resume")
   .option("--yolo", "resume with --dangerously-skip-permissions")
+  .option("--resume-model <model>", "model for resumed session (opus, sonnet, haiku, opusplan)")
   .option("--dry-run", "preview changes without writing (still generates summary preview)")
   .option("--no-summary", "skip AI summarization of pruned messages")
   .option("--summary-model <model>", "model for summarization (haiku, sonnet, or full name)")
@@ -213,9 +214,23 @@ function estimateContentTokens(content: unknown): number {
   return 0;
 }
 
-export function countSessionTokens(lines: string[]): { total: number, perLine: Map<number, number> } {
-  let total = 0;
+export interface TokenBreakdown {
+  input: number;
+  cacheRead: number;
+  cacheCreation: number;
+  estimated: number;
+}
+
+export function countSessionTokens(lines: string[]): {
+  total: number;
+  perLine: Map<number, number>;
+  breakdown: TokenBreakdown;
+} {
   const perLine = new Map<number, number>();
+  const breakdown: TokenBreakdown = { input: 0, cacheRead: 0, cacheCreation: 0, estimated: 0 };
+
+  let rawSum = 0;
+  const rawTokens = new Map<number, number>();
 
   lines.forEach((line, i) => {
     if (i === 0) return;
@@ -224,16 +239,34 @@ export function countSessionTokens(lines: string[]): { total: number, perLine: M
       if (MSG_TYPES.has(obj.type)) {
         const usage = obj.message?.usage;
         const content = obj.message?.content;
-        const tokens = usage?.output_tokens
-          ?? usage?.input_tokens
-          ?? estimateContentTokens(content);
-        perLine.set(i, tokens);
-        total += tokens;
+
+        if (usage?.cache_read_input_tokens || usage?.cache_creation_input_tokens) {
+          breakdown.cacheRead = usage.cache_read_input_tokens ?? 0;
+          breakdown.cacheCreation = usage.cache_creation_input_tokens ?? 0;
+          breakdown.input = usage.input_tokens ?? 0;
+        }
+
+        const raw = usage?.output_tokens ?? estimateContentTokens(content);
+        if (!usage?.output_tokens) {
+          breakdown.estimated += raw;
+        }
+
+        rawTokens.set(i, raw);
+        rawSum += raw;
       }
     } catch {}
   });
 
-  return { total, perLine };
+  const cacheTotal = breakdown.cacheRead + breakdown.cacheCreation + breakdown.input;
+  const total = cacheTotal > 0 ? cacheTotal : rawSum;
+
+  const scaleFactor = rawSum > 0 ? total / rawSum : 1;
+
+  for (const [i, raw] of rawTokens) {
+    perLine.set(i, Math.ceil(raw * scaleFactor));
+  }
+
+  return { total, perLine, breakdown };
 }
 
 // Count assistant messages (for stats display)
@@ -789,14 +822,15 @@ async function pruneCommand(
     const sessionContent = await fs.readFile(latest.path, 'utf-8');
     const sessionLines = sessionContent.split('\n').filter(l => l.trim());
     const assistantCount = countAssistantMessages(sessionLines);
-    const { total: totalTokens } = countSessionTokens(sessionLines);
+    const { total: totalTokens, breakdown } = countSessionTokens(sessionLines);
 
     console.log();
     console.log(chalk.bold.cyan('SESSION'));
     console.log(chalk.white('  ID: ') + chalk.bold.yellow(latest.id));
     console.log(chalk.white('  Modified: ') + chalk.dim(latest.modifiedAt.toLocaleString()));
     console.log(chalk.white('  Size: ') + chalk.dim(`${latest.sizeKB}KB`));
-    console.log(chalk.white('  Tokens: ') + chalk.dim(`${totalTokens.toLocaleString()}`));
+    console.log(chalk.white('  Tokens: ') + chalk.bold(`${totalTokens.toLocaleString()}`));
+    console.log(chalk.dim(`    input: ${breakdown.input.toLocaleString()} | cache_read: ${breakdown.cacheRead.toLocaleString()} | cache_create: ${breakdown.cacheCreation.toLocaleString()}${breakdown.estimated > 0 ? ` | estimated: ${breakdown.estimated.toLocaleString()}` : ''}`));
     console.log(chalk.white('  Messages: ') + chalk.dim(`${assistantCount} assistant`));
     console.log();
 
@@ -842,12 +876,17 @@ async function main(sessionId: string, opts: { keep?: number; resume?: boolean; 
   const lines = raw.split(/\r?\n/).filter(Boolean);
 
   const keepTokens = opts.keep ?? DEFAULT_KEEP_TOKENS;
-  const { total: totalTokens } = countSessionTokens(lines);
+  const { total: totalTokens, breakdown } = countSessionTokens(lines);
 
   const originalSizeKB = Math.round(raw.length / 1024);
   const msgCounts = countMessageTypes(lines);
 
   spinner.succeed(`${chalk.green("Scanned")} ${file}`);
+
+  console.log();
+  console.log(chalk.bold('Token Breakdown:'));
+  console.log(chalk.dim(`  input: ${breakdown.input.toLocaleString()} | cache_read: ${breakdown.cacheRead.toLocaleString()} | cache_create: ${breakdown.cacheCreation.toLocaleString()}${breakdown.estimated > 0 ? ` | estimated: ${breakdown.estimated.toLocaleString()}` : ''}`));
+  console.log(chalk.bold(`  Total: ${totalTokens.toLocaleString()}`));
 
   // Early exit if under threshold
   if (totalTokens <= keepTokens) {
@@ -887,9 +926,11 @@ async function main(sessionId: string, opts: { keep?: number; resume?: boolean; 
       process.stdout.write('\r' + ' '.repeat(80) + '\r');
       console.log(chalk.bold.green('  RESUMING SESSION NOW!\n'));
 
-      const args = opts.yolo
-        ? ['--dangerously-skip-permissions', '--resume', sessionId]
-        : ['--resume', sessionId];
+      const args = [
+        ...(opts.yolo ? ['--dangerously-skip-permissions'] : []),
+        '--resume', sessionId,
+        ...(opts.resumeModel ? ['--model', opts.resumeModel] : [])
+      ];
 
       console.log(chalk.dim(`Resuming: claude ${args.join(' ')}\n`));
 
@@ -1179,9 +1220,11 @@ async function main(sessionId: string, opts: { keep?: number; resume?: boolean; 
   }
 
   if (process.stdin.isTTY && opts.resume !== false) {
-    const args = opts.yolo
-      ? ['--dangerously-skip-permissions', '--resume', sessionId]
-      : ['--resume', sessionId];
+    const args = [
+      ...(opts.yolo ? ['--dangerously-skip-permissions'] : []),
+      '--resume', sessionId,
+      ...(opts.resumeModel ? ['--model', opts.resumeModel] : [])
+    ];
 
     console.log(chalk.dim(`Resuming: claude ${args.join(' ')}\n`));
 

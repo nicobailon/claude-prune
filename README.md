@@ -103,6 +103,7 @@ ccprune restore <sessionId> [--dry-run]
 | `--pick` | Interactively select from available sessions |
 | `-n, --no-resume` | Skip automatic session resume |
 | `--yolo` | Resume with `--dangerously-skip-permissions` |
+| `--resume-model <model>` | Model for resumed session (opus, sonnet, haiku, opusplan) |
 | `-k, --keep <number>` | Number of tokens to retain (default: 55000) |
 | `--keep-tokens <number>` | Number of tokens to retain (alias for `-k`) |
 | `--dry-run` | Preview changes and summary without modifying files |
@@ -134,6 +135,12 @@ npx ccprune -n
 
 # Resume in yolo mode (--dangerously-skip-permissions)
 npx ccprune --yolo
+
+# Resume with a specific model (e.g., Opus 4.5)
+npx ccprune --resume-model opus
+
+# Combine yolo mode with Opus
+npx ccprune --yolo --resume-model opus
 
 # Pick from available sessions interactively
 npx ccprune --pick
@@ -190,7 +197,7 @@ BEFORE                 AFTER FIRST PRUNE           AFTER RE-PRUNE
 ```
 
 1. **Locates Session File**: Finds `$CLAUDE_CONFIG_DIR/projects/{project-path}/{sessionId}.jsonl`
-2. **Counts Tokens**: Calculates total tokens using `message.usage.output_tokens` when available. Fallback estimation: ~4 chars/token for text, 4000 tokens per image, 50 tokens per tool_use
+2. **Counts Tokens**: Uses Claude's cumulative usage data from the last message: `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`. This matches Claude Code's UI display exactly
 3. **Early Exit**: If total tokens ≤ threshold (55K default), skips pruning and auto-resumes
 4. **Preserves Critical Data**: Always keeps the first line (file-history-snapshot or session metadata)
 5. **Token-Based Cutoff**: Scans right-to-left, accumulating tokens until adding the next message would exceed the threshold
@@ -293,6 +300,11 @@ ccprune <id> --keep-tokens 80000 # keep 80K tokens
 - **Lenient boundary**: Includes one extra message at the boundary to preserve context
 - Summary is enabled by default (use `--no-summary` to disable)
 - Re-pruning synthesizes old summary + new pruned content into one summary
+
+**Key changes in v4.x:**
+- **Accurate token counting**: Uses Claude's cumulative usage data (`input_tokens + cache_read + cache_creation`) to match Claude Code UI
+- **Proportional scaling**: Per-message tokens are scaled to match total context for accurate pruning
+- **`--resume-model`**: Specify which model to use when auto-resuming (opus, sonnet, haiku, opusplan)
 
 ## Development
 
