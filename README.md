@@ -23,10 +23,10 @@ Next time your Claude Code context is running low, just quit cc then run `npx cc
 
 ```bash
 # Using npx (Node.js)
-npx ccprune <sessionId> --keep 50
+npx ccprune
 
 # Using bunx (Bun)
-bunx ccprune <sessionId> --keep 50
+bunx ccprune
 ```
 
 ### Install globally
@@ -63,6 +63,8 @@ For fast, high-quality summarization, set up a Gemini API key:
 
 With `GEMINI_API_KEY` set, ccprune automatically uses Gemini 2.5 Flash for fast summarization without chunking.
 
+**Note**: If `GEMINI_API_KEY` is not set, ccprune automatically falls back to Claude Code CLI for summarization (no additional setup required).
+
 ## Usage
 
 ```bash
@@ -87,6 +89,13 @@ ccprune restore <sessionId> [--dry-run]
 
 - `sessionId`: (Optional) UUID of the Claude Code session. Auto-detects latest if omitted.
 
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `restore <sessionId>` | Restore a session from the latest backup |
+| `restore <sessionId> --dry-run` | Preview restore without making changes |
+
 ### Options
 
 | Option | Description |
@@ -108,9 +117,11 @@ ccprune restore <sessionId> [--dry-run]
 
 If no session ID is provided, auto-detects the most recently modified session. If no keep option is specified, defaults to 55,000 tokens.
 
-**Default summarization:**
-- With `GEMINI_API_KEY` set: Gemini 2.5 Flash (fast, no chunking)
-- Without API key: Claude Code CLI (with chunking for large transcripts)
+**Summarization priority:**
+1. `--claude-code` flag: Force Claude Code CLI (chunks transcripts >30K chars)
+2. `--gemini` or `--gemini-flash` flags: Use Gemini API
+3. Auto-detect: If `GEMINI_API_KEY` is set, uses Gemini 2.5 Flash
+4. Fallback: Claude Code CLI (no API key needed)
 
 ### Examples
 
@@ -137,7 +148,7 @@ npx ccprune --keep-tokens 80000
 npx ccprune --dry-run
 
 # Skip summarization for faster pruning
-npx ccprune --keep 55000 --no-summary
+npx ccprune --no-summary
 
 # Use Claude Code CLI with haiku model (faster/cheaper)
 npx ccprune --claude-code --summary-model haiku
@@ -179,18 +190,48 @@ BEFORE                 AFTER FIRST PRUNE           AFTER RE-PRUNE
 ```
 
 1. **Locates Session File**: Finds `$CLAUDE_CONFIG_DIR/projects/{project-path}/{sessionId}.jsonl`
-2. **Counts Tokens**: Calculates total tokens in session using `message.usage.output_tokens` (with content-based fallback)
+2. **Counts Tokens**: Calculates total tokens using `message.usage.output_tokens` when available. Fallback estimation: ~4 chars/token for text, 4000 tokens per image, 50 tokens per tool_use
 3. **Early Exit**: If total tokens ≤ threshold (55K default), skips pruning and auto-resumes
 4. **Preserves Critical Data**: Always keeps the first line (file-history-snapshot or session metadata)
-5. **Token-Based Cutoff**: Scans right-to-left, accumulating tokens until reaching threshold, then prunes everything before that point
-6. **Lenient Boundary**: Includes one extra message at the boundary to preserve more context
-7. **Content Extraction**: Extracts text from messages, including `tool_result` outputs and `thinking` blocks. Tool calls become `[Used tool: ToolName]` placeholders to provide context without verbose tool I/O
-8. **Orphan Cleanup**: Removes `tool_result` blocks in kept messages that reference `tool_use` blocks from pruned messages
-9. **AI Summarization**: Generates a structured summary with sections: Overview, What Was Accomplished, Files Modified, Key Technical Details, Current State & Pending Work
-10. **Summary Synthesis**: Re-pruning synthesizes old summary + new pruned content into one cohesive summary
-11. **Chunked Summarization**: Large transcripts (>30KB) are chunked and summarized in parts when using `--claude-code`
-12. **Safe Backup**: Creates timestamped backup in `prune-backup/` before modifying
-13. **Auto-Resume**: Optionally resumes Claude Code session after pruning
+5. **Token-Based Cutoff**: Scans right-to-left, accumulating tokens until adding the next message would exceed the threshold
+6. **Content Extraction**: Extracts text from messages, including `tool_result` outputs and `thinking` blocks. Tool calls become `[Used tool: ToolName]` placeholders to provide context without verbose tool I/O
+7. **Orphan Cleanup**: Removes `tool_result` blocks in kept messages that reference `tool_use` blocks from pruned messages
+8. **AI Summarization**: Generates a structured summary with sections: Overview, What Was Accomplished, Files Modified, Key Technical Details, Current State & Pending Work
+9. **Summary Synthesis**: Re-pruning synthesizes old summary + new pruned content into one cohesive summary
+   - **Gemini** (default with API key): Handles large transcripts natively without chunking
+   - **Claude Code CLI** (fallback): May chunk transcripts >30K characters (see [Claude Code CLI Summarization](#claude-code-cli-summarization) below)
+10. **Safe Backup**: Creates timestamped backup in `prune-backup/` before modifying
+11. **Auto-Resume**: Optionally resumes Claude Code session after pruning
+
+## Claude Code CLI Summarization
+
+When using the `--claude-code` flag (or when `GEMINI_API_KEY` is not set), ccprune uses the Claude Code CLI for summarization with these specific behaviors:
+
+**Chunking for Large Transcripts**:
+- Transcripts >30,000 characters are automatically split into chunks
+- Each chunk is summarized independently
+- Chunk summaries are then combined into a final unified summary
+- **Why**: Ensures reliable summarization even for very long sessions
+
+**Model Selection**:
+- Default: Uses your Claude Code CLI default model
+- Override with `--summary-model haiku` or `--summary-model sonnet`
+- Supports full model names (e.g., `claude-3-5-sonnet-20241022`)
+
+**Timeout & Retries**:
+- Default timeout: 360 seconds (6 minutes)
+- Override with `--summary-timeout <ms>`
+- Automatic retries: Up to 2 attempts on failure
+
+**When to Use**:
+- No API key required (uses existing Claude Code subscription)
+- Handles extremely large transcripts via chunking
+- Works offline (if Claude Code CLI works offline)
+
+**Trade-offs**:
+- Slower than Gemini API (spawns subprocess)
+- Chunking may lose some context coherence for very large sessions
+- Requires Claude Code CLI to be installed and authenticated
 
 ## File Structure
 
@@ -213,7 +254,7 @@ For example, a project at `/Users/alice/my-app` becomes:
 By default, ccprune looks for session files in `~/.claude`. If Claude Code is configured to use a different directory, you can specify it with the `CLAUDE_CONFIG_DIR` environment variable:
 
 ```bash
-CLAUDE_CONFIG_DIR=/custom/path/to/claude ccprune <sessionId> --keep 50
+CLAUDE_CONFIG_DIR=/custom/path/to/claude ccprune
 ```
 
 ### GEMINI_API_KEY

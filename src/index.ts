@@ -148,7 +148,7 @@ export function getProjectDir(): string {
 const program = new Command()
   .name("ccprune")
   .description("Prune early messages from a Claude Code session.jsonl file")
-  .version("2.3.1");
+  .version("3.0.1");
 
 program
   .command("restore")
