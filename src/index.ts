@@ -148,14 +148,25 @@ export function getProjectDir(): string {
 const program = new Command()
   .name("ccprune")
   .description("Prune early messages from a Claude Code session.jsonl file")
-  .version("4.1.2");
+  .version("4.2.0")
+  .enablePositionalOptions();
 
 program
   .command("restore")
   .description("Restore a session from the latest backup")
   .argument("<sessionId>", "UUID of the session to restore (without .jsonl)")
   .option("--dry-run", "show what would be restored but don't write")
-  .action(restore);
+  .action(function(sessionId) {
+    return restore(sessionId, this.opts());
+  });
+
+program
+  .command("undo")
+  .description("Undo the last prune by restoring the most recent session from backup")
+  .option("--dry-run", "show what would be restored but don't write")
+  .action(function() {
+    return undo(this.opts());
+  });
 
 // Default command - prune session
 const DEFAULT_KEEP_TOKENS = 40000;
@@ -281,6 +292,35 @@ export function countAssistantMessages(lines: string[]): number {
   return count;
 }
 
+// Clean orphaned tool_results from the first user message with array content
+// These reference tool_use blocks in dropped assistant messages
+export function cleanOrphanedToolResults(lines: string[]): string[] {
+  const result = [...lines];
+
+  for (let i = 1; i < result.length; i++) {
+    try {
+      const obj = JSON.parse(result[i]);
+      if (obj.isCompactSummary) continue;
+      if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
+        const filtered = obj.message.content.filter(
+          (block: any) => block.type !== 'tool_result'
+        );
+        if (filtered.length === 0) {
+          result.splice(i, 1);
+        } else if (filtered.length !== obj.message.content.length) {
+          obj.message.content = filtered;
+          result[i] = JSON.stringify(obj);
+        }
+        break;
+      }
+      // NOTE: Removed `if (MSG_TYPES.has(obj.type)) break;`
+      // That caused premature exit on assistant messages before reaching user with orphans
+    } catch {}
+  }
+
+  return result;
+}
+
 // Extract core logic for testing
 export function pruneSessionLines(lines: string[], keepTokens: number): { outLines: string[], kept: number, dropped: number, assistantCount: number, keptTokens: number, droppedTokens: number, droppedMessages: { type: string, content: string, isSummary?: boolean }[] } {
   const { total: totalTokens, perLine } = countSessionTokens(lines);
@@ -390,27 +430,10 @@ export function pruneSessionLines(lines: string[], keepTokens: number): { outLin
     }
   });
 
-  // Clean up orphaned tool_results in the first kept user message
-  // These reference tool_use blocks in dropped assistant messages
-  for (let i = 1; i < outLines.length; i++) {
-    try {
-      const obj = JSON.parse(outLines[i]);
-      if (obj.isCompactSummary) continue;
-      if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
-        const filtered = obj.message.content.filter(
-          (block: any) => block.type !== 'tool_result'
-        );
-        if (filtered.length === 0) {
-          outLines.splice(i, 1);
-        } else if (filtered.length !== obj.message.content.length) {
-          obj.message.content = filtered;
-          outLines[i] = JSON.stringify(obj);
-        }
-        break;
-      }
-      if (MSG_TYPES.has(obj.type)) break;
-    } catch { /* skip non-JSON */ }
-  }
+  // Clean up orphaned tool_results using shared function
+  const cleanedOutLines = cleanOrphanedToolResults(outLines);
+  outLines.length = 0;
+  outLines.push(...cleanedOutLines);
 
   // Update leafUuid in first line to point to last message
   if (outLines.length > 1) {
@@ -917,6 +940,14 @@ async function main(sessionId: string, opts: { keep?: number; resume?: boolean; 
   if (totalTokens <= keepTokens) {
     console.log();
     console.log(chalk.green(`Session has ${totalTokens.toLocaleString()} tokens (under ${keepTokens.toLocaleString()} threshold) - no compaction needed`));
+
+    // Still clean orphaned tool_results even without compaction
+    const cleanedLines = cleanOrphanedToolResults(lines);
+    if (cleanedLines.length !== lines.length || cleanedLines.some((l, i) => l !== lines[i])) {
+      fs.writeFileSync(file, cleanedLines.join('\n') + '\n');
+      console.log(chalk.yellow('Cleaned orphaned tool_results'));
+    }
+
     console.log();
 
     // Skip to auto-resume
@@ -1326,7 +1357,7 @@ async function restore(sessionId: string, opts: { dryRun?: boolean }) {
     }
 
     await fs.copyFile(backupPath, file);
-    
+
     console.log(chalk.bold.green("Restored:"), chalk.white(`${file}`));
     console.log(chalk.dim(`From backup: ${backupPath}`));
 
@@ -1334,4 +1365,22 @@ async function restore(sessionId: string, opts: { dryRun?: boolean }) {
     spinner.fail(chalk.red(`Error: ${error}`));
     process.exit(1);
   }
+}
+
+async function undo(opts: { dryRun?: boolean }) {
+  const cwdProject = process.cwd().replace(/[\/\.]/g, '-');
+  const projectDir = join(getClaudeConfigDir(), "projects", cwdProject);
+
+  const sessions = await listSessions(projectDir);
+  if (sessions.length === 0) {
+    console.error(chalk.red("No sessions found in current project"));
+    process.exit(1);
+  }
+
+  const latest = sessions[0];
+  console.log(chalk.cyan(`Most recent session: ${latest.id}`));
+  console.log(chalk.dim(`Modified: ${latest.modifiedAt.toLocaleString()}`));
+  console.log();
+
+  await restore(latest.id, opts);
 }

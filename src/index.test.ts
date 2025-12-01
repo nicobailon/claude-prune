@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { pruneSessionLines, findLatestBackup, getClaudeConfigDir, countAssistantMessages, extractMessageContent, generateUUID, listSessions, findLatestSession, getProjectDir } from './index.js';
+import { pruneSessionLines, findLatestBackup, getClaudeConfigDir, countAssistantMessages, extractMessageContent, generateUUID, listSessions, findLatestSession, getProjectDir, cleanOrphanedToolResults } from './index.js';
 import { displayCelebration } from './stats.js';
 import { execSync } from 'child_process';
 import { homedir } from 'os';
@@ -42,6 +42,87 @@ describe('getClaudeConfigDir', () => {
     process.env.CLAUDE_CONFIG_DIR = '';
     const result = getClaudeConfigDir();
     expect(result).toBe(join(homedir(), '.claude'));
+  });
+});
+
+describe('cleanOrphanedToolResults', () => {
+  it('removes orphaned tool_results even when assistant messages come first', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a1" }),
+      JSON.stringify({ type: "user", isCompactSummary: true, uuid: "sum", message: { content: "summary" } }),
+      JSON.stringify({ type: "assistant", uuid: "a1", message: { content: [{ type: "text", text: "response" }] } }),
+      JSON.stringify({ type: "assistant", uuid: "a2", message: { content: [{ type: "text", text: "more" }] } }),
+      JSON.stringify({ type: "user", uuid: "u1", message: { content: [
+        { type: "tool_result", tool_use_id: "orphan", content: "result" }
+      ] } }),
+    ];
+
+    const result = cleanOrphanedToolResults(lines);
+
+    expect(result.length).toBe(4);
+    expect(result.some(l => l.includes('orphan'))).toBe(false);
+  });
+
+  it('preserves text content when removing tool_results', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a1" }),
+      JSON.stringify({ type: "user", uuid: "u1", message: { content: [
+        { type: "tool_result", tool_use_id: "orphan", content: "result" },
+        { type: "text", text: "user message" }
+      ] } }),
+    ];
+
+    const result = cleanOrphanedToolResults(lines);
+    const userMsg = JSON.parse(result[1]);
+
+    expect(userMsg.message.content).toHaveLength(1);
+    expect(userMsg.message.content[0].type).toBe('text');
+  });
+
+  it('skips compact summary and continues to find user with orphans', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a1" }),
+      JSON.stringify({ type: "user", isCompactSummary: true, uuid: "sum", message: { content: "summary text" } }),
+      JSON.stringify({ type: "user", uuid: "u1", message: { content: [
+        { type: "tool_result", tool_use_id: "orphan1", content: "result1" }
+      ] } }),
+    ];
+
+    const result = cleanOrphanedToolResults(lines);
+
+    expect(result.length).toBe(2);
+    expect(result[1]).toContain('isCompactSummary');
+    expect(result.some(l => l.includes('orphan'))).toBe(false);
+  });
+
+  it('returns unchanged lines when no orphans present', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a1" }),
+      JSON.stringify({ type: "user", uuid: "u1", message: { content: [
+        { type: "text", text: "hello" }
+      ] } }),
+      JSON.stringify({ type: "assistant", uuid: "a1", message: { content: [{ type: "text", text: "hi" }] } }),
+    ];
+
+    const result = cleanOrphanedToolResults(lines);
+
+    expect(result.length).toBe(3);
+    expect(result).toEqual(lines);
+  });
+
+  it('handles user messages without array content', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a1" }),
+      JSON.stringify({ type: "user", uuid: "u1", message: { content: "plain string" } }),
+      JSON.stringify({ type: "user", uuid: "u2", message: { content: [
+        { type: "tool_result", tool_use_id: "orphan", content: "result" }
+      ] } }),
+    ];
+
+    const result = cleanOrphanedToolResults(lines);
+
+    expect(result.length).toBe(2);
+    expect(result[1]).toContain('plain string');
   });
 });
 
