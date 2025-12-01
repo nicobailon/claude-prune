@@ -148,7 +148,7 @@ export function getProjectDir(): string {
 const program = new Command()
   .name("ccprune")
   .description("Prune early messages from a Claude Code session.jsonl file")
-  .version("4.1.1");
+  .version("4.1.2");
 
 program
   .command("restore")
@@ -395,6 +395,7 @@ export function pruneSessionLines(lines: string[], keepTokens: number): { outLin
   for (let i = 1; i < outLines.length; i++) {
     try {
       const obj = JSON.parse(outLines[i]);
+      if (obj.isCompactSummary) continue;
       if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
         const filtered = obj.message.content.filter(
           (block: any) => block.type !== 'tool_result'

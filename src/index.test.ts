@@ -270,6 +270,32 @@ describe('pruneSessionLines', () => {
     // leafUuid should still point to last message (which is a2)
     expect(firstLine.leafUuid).toBe("a2");
   });
+
+  it('cleans orphaned tool_results even when compact summary comes first', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a2", summary: "file history" }),
+      JSON.stringify({ type: "user", isCompactSummary: true, uuid: "sum1", message: { content: "Previous summary text" } }),
+      JSON.stringify({ type: "user", uuid: "u1", message: { content: [
+        { type: "tool_result", tool_use_id: "orphaned_tool", content: "result" },
+        { type: "text", text: "user message" }
+      ] } }),
+      JSON.stringify({ type: "assistant", uuid: "a2", message: { content: "response", usage: { output_tokens: 100 } } }),
+    ];
+
+    const { outLines } = pruneSessionLines(lines, 99999);
+
+    const userMsg = outLines.find(l => {
+      try {
+        const obj = JSON.parse(l);
+        return obj.type === 'user' && !obj.isCompactSummary && obj.uuid === 'u1';
+      } catch { return false; }
+    });
+
+    expect(userMsg).toBeDefined();
+    const parsed = JSON.parse(userMsg!);
+    expect(parsed.message.content).toHaveLength(1);
+    expect(parsed.message.content[0].type).toBe('text');
+  });
 });
 
 describe('execSync error handling', () => {
