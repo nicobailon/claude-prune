@@ -292,30 +292,50 @@ export function countAssistantMessages(lines: string[]): number {
   return count;
 }
 
-// Clean orphaned tool_results from the first user message with array content
+// Clean orphaned tool_results from ALL user messages
 // These reference tool_use blocks in dropped assistant messages
 export function cleanOrphanedToolResults(lines: string[]): string[] {
   const result = [...lines];
 
+  // First pass: collect all tool_use IDs from assistant messages
+  const validToolUseIds = new Set<string>();
+  for (let i = 1; i < result.length; i++) {
+    try {
+      const obj = JSON.parse(result[i]);
+      if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
+        for (const block of obj.message.content) {
+          if (block.type === 'tool_use' && block.id) {
+            validToolUseIds.add(block.id);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Second pass: remove tool_results that reference non-existent tool_use IDs
+  const toRemove: number[] = [];
   for (let i = 1; i < result.length; i++) {
     try {
       const obj = JSON.parse(result[i]);
       if (obj.isCompactSummary) continue;
       if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
-        const filtered = obj.message.content.filter(
-          (block: any) => block.type !== 'tool_result'
-        );
+        const filtered = obj.message.content.filter((block: any) => {
+          if (block.type !== 'tool_result') return true;
+          return validToolUseIds.has(block.tool_use_id);
+        });
         if (filtered.length === 0) {
-          result.splice(i, 1);
+          toRemove.push(i);
         } else if (filtered.length !== obj.message.content.length) {
           obj.message.content = filtered;
           result[i] = JSON.stringify(obj);
         }
-        break;
       }
-      // NOTE: Removed `if (MSG_TYPES.has(obj.type)) break;`
-      // That caused premature exit on assistant messages before reaching user with orphans
     } catch {}
+  }
+
+  // Remove empty messages in reverse order to preserve indices
+  for (let i = toRemove.length - 1; i >= 0; i--) {
+    result.splice(toRemove[i], 1);
   }
 
   return result;

@@ -6,101 +6,81 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ccprune** - CLI tool that prunes Claude Code session transcript files (`.jsonl`) to reduce context usage. Operates on session files at `$CLAUDE_CONFIG_DIR/projects/{project-path-with-hyphens}/{sessionId}.jsonl` (where `$CLAUDE_CONFIG_DIR` defaults to `~/.claude` if not set).
 
-Fork of [claude-prune](https://github.com/DannyAziz/claude-prune) with enhanced features.
-
-**v2.x**: Summarization enabled by default, zero-config default (20%), summary synthesis on re-prune.
+Fork of [claude-prune](https://github.com/DannyAziz/claude-prune) with token-based pruning, AI summarization, and auto-resume.
 
 ## Essential Commands
 
 ```bash
 # Development
 bun install                    # Install dependencies
-bun run test                   # Run all tests (uses Vitest via npm script)
-bun run test -- --watch        # Run tests in watch mode
-bun run test -- --coverage     # Run tests with coverage
-bun run test src/index.test.ts # Run a single test file
+bun run test                   # Run all tests (Vitest)
+bun run test -- --watch        # Tests in watch mode
+bun run test src/index.test.ts # Single test file
 bun run build                  # Build for distribution
 
 # Testing the CLI locally
-bun run src/index.ts                                      # Auto-detect latest session, prune 20%
-bun run src/index.ts --pick                               # Interactive session picker
-bun run src/index.ts -n                                   # Prune only, don't resume
-bun run src/index.ts <sessionId> -k 10                    # Prune specific session by count
-bun run src/index.ts <sessionId> -p 25                    # Prune by percentage (keep 25%)
-bun run src/index.ts --no-summary                         # Skip summary
-bun run src/index.ts --summary-model haiku                # Use haiku model
-bun run src/index.ts restore <sessionId>                  # Test restore command
-./dist/index.js --help                                    # Test built CLI
+bun run src/index.ts                              # Auto-detect, prune to 40K tokens, auto-resume
+bun run src/index.ts --pick                       # Interactive session picker
+bun run src/index.ts -n                           # Prune only, don't resume
+bun run src/index.ts --dry-run                    # Preview changes without writing
+bun run src/index.ts --no-summary                 # Skip AI summarization
+bun run src/index.ts restore <sessionId>          # Restore from backup
+bun run src/index.ts undo                         # Undo last prune (restore most recent session)
+./dist/index.js --help                            # Test built CLI
 ```
 
 ## Architecture
 
-Single-file CLI: all core logic in `src/index.ts` with functions exported for testing. Tests co-located as `src/*.test.ts`.
+Single-file CLI in `src/index.ts` with all core logic exported for testing. Tests in `src/*.test.ts`. Summarization logic separated into `src/generateSummary.ts`.
 
-**`getClaudeConfigDir()`** - Returns Claude config directory:
-- Checks `CLAUDE_CONFIG_DIR` env var, falls back to `~/.claude`
+### Token Counting (`countSessionTokens`)
 
-**`countAssistantMessages(lines)`** - Pre-scan for percentage calculation:
-- Counts assistant messages in lines (skips first line)
-- Used to calculate keepN from `--keep-percent`
+Core function for accurate token calculation:
+- Uses Claude's cumulative usage data from last message: `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`
+- Falls back to character-based estimation (chars/4) for messages without usage data
+- Returns `{ total, perLine: Map<lineIndex, tokens>, breakdown }`
+- Per-line tokens are proportionally scaled to match the cumulative total
 
-**`extractMessageContent(content)`** - Extracts text from message content:
-- Handles string content directly
-- Handles array content with multiple block types: `text`, `tool_result`, `thinking`, `tool_use`
-- Returns `[Used tool: ToolName]` for tool_use blocks (for summary context)
-- Filters empty results and joins with `\n\n`
+### Pruning Algorithm (`pruneSessionLines`)
 
-**`pruneSessionLines(lines, keepN)`** - Main pruning algorithm:
-1. Preserves first line (file-history-snapshot or session metadata)
-2. Finds assistant message indices, keeps everything from Nth-to-last assistant message forward
-3. Preserves non-message lines (tool results, file-history-snapshots)
-4. **Cache Token Hack**: Zeros out the last non-zero `cache_read_input_tokens` in `usage` or `message.usage` objects to reduce UI context percentage display
-5. Returns `droppedMessages[]` with `isSummary` flag for each message (detects `isCompactSummary: true`)
+1. Preserves first line (session metadata with `leafUuid`)
+2. Scans right-to-left accumulating tokens until threshold reached
+3. Preserves non-message lines (file-history-snapshots, tool results)
+4. Calls `cleanOrphanedToolResults()` to remove tool_results referencing pruned tool_use blocks
+5. Updates `leafUuid` in first line to point to last kept message (critical for Claude Code to recognize conversation chain)
+6. Zeros out last non-zero `cache_read_input_tokens` (cache token hack for UI display)
 
-**`generateSummary(droppedMessages, options)`** - AI summarization:
+### Orphan Cleanup (`cleanOrphanedToolResults`)
+
+Removes orphaned `tool_result` blocks from the first user message with array content:
+- Skips `isCompactSummary` messages (continue, don't break)
+- Does NOT break on assistant messages (previous bug)
+- Called both in `pruneSessionLines()` and in the "under threshold" early exit path
+
+### Summary Generation (`generateSummary`)
+
 - Separates existing summary (`isSummary: true`) from chat messages
-- **Summary Synthesis**: If existing summary found, uses special prompt to synthesize old summary + new messages
-- **Edge Case**: If only summary dropped (no chat), returns it unchanged
-- **Structured Output**: Generates summary with 5 sections (Overview, What Was Accomplished, Files Modified, Key Technical Details, Current State & Pending Work)
-- Formats transcript with proper labels (User/Assistant/System)
-- Truncates at `maxLength` (default 60K chars) to avoid issues
-- Uses stdin to pipe prompt to `claude -p` CLI (no shell escaping needed)
-- Supports `--model` option for model selection (haiku, sonnet, or full name)
-- Returns summary starting with "Previously, we discussed..."
-- Result appended as `{ type: "user", isCompactSummary: true, message: {...} }` at end of session
+- **Summary Synthesis**: If existing summary found, synthesizes old + new into one
+- Uses stdin to pipe prompt to summarization backend (Gemini API or Claude Code CLI)
+- Result appended as `{ type: "user", isCompactSummary: true, message: {...} }`
 
-**`listSessions(projectDir)`** - Session discovery:
-- Lists all UUID-format `.jsonl` files in project directory
-- Filters out agent sessions (non-UUID filenames)
-- Returns sorted by modification time (newest first)
-- Includes id, path, modifiedAt, sizeKB for each session
+### CLI Commands
 
-**`findLatestSession(projectDir)`** - Returns most recently modified session or null
+| Command | Description |
+|---------|-------------|
+| `ccprune` | Auto-detect latest session, prune to 40K tokens, auto-resume |
+| `ccprune --pick` | Interactive session picker |
+| `ccprune -n` | Prune only, don't resume |
+| `ccprune restore <id>` | Restore session from latest backup |
+| `ccprune undo` | Restore most recent session from backup |
 
-**`findLatestBackup(backupFiles, sessionId)`** - Backup discovery:
-- Filters by pattern `{sessionId}.jsonl.{timestamp}`
-- Filters out NaN timestamps, sorts descending
-
-**Project Path Resolution**: `/Users/alice/project` becomes `-Users-alice-project` via `process.cwd().replace(/\//g, '-')`
-
-**Backup Strategy**: Creates backups in `prune-backup/` subdirectory as `{sessionId}.jsonl.{timestamp}` before modifications.
-
-**CLI Commands**:
-- `ccprune` - Auto-detect latest session, prune (20% default), and resume automatically
-- `ccprune --pick` - Interactive session picker
-- `ccprune -n` / `--no-resume` - Prune only, don't resume
-- `ccprune <sessionId>` - Prune specific session
-- `ccprune <sessionId> -k <n>` - Prune by message count
-- `ccprune <sessionId> -p <percent>` - Prune by percentage (1-100)
-- `ccprune restore <sessionId>` - Restore from latest backup
-- Options: `--no-summary`, `--summary-model <model>`, `--dry-run`
-- Priority: `-k` > `-p` > default 20%
-- `--no-summary` with existing summary: preserves existing summary as-is
+Key options: `--keep <tokens>`, `--dry-run`, `--no-summary`, `--yolo`, `--resume-model <model>`
 
 ## Key Implementation Details
 
-- **Message Detection**: `MSG_TYPES = new Set(["user", "assistant", "system"])` distinguishes message objects from metadata/tool results
-- **Safe Parsing**: All JSON parsing wrapped in try/catch for mixed content files
-- **Interactive Confirmation**: Uses `@clack/prompts` unless `--dry-run` specified
-- **Output Format**: JSONL with `\n` line endings
-- **Dry-Run Preview**: Shows summary that would be inserted without writing files
+- **Message Detection**: `MSG_TYPES = new Set(["user", "assistant", "system"])`
+- **Project Path**: `/Users/alice/project` becomes `-Users-alice-project`
+- **Backup Strategy**: `prune-backup/{sessionId}.jsonl.{timestamp}`
+- **Commander.js**: Uses `enablePositionalOptions()` to handle subcommand options (prevents conflicts with main program's `--dry-run`)
+- **Safe Parsing**: All JSON parsing wrapped in try/catch
+- **Default Threshold**: 40K tokens (results in ~55K total after Claude Code adds system context)
