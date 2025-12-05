@@ -19,7 +19,7 @@ bun run test src/index.test.ts # Single test file
 bun run build                  # Build for distribution
 
 # Testing the CLI locally
-bun run src/index.ts                              # Auto-detect, prune to 40K tokens, auto-resume
+bun run src/index.ts                              # Auto-detect, prune to 55K tokens, auto-resume
 bun run src/index.ts --pick                       # Interactive session picker
 bun run src/index.ts -n                           # Prune only, don't resume
 bun run src/index.ts --dry-run                    # Preview changes without writing
@@ -68,7 +68,7 @@ Removes orphaned `tool_result` blocks from the first user message with array con
 
 | Command | Description |
 |---------|-------------|
-| `ccprune` | Auto-detect latest session, prune to 40K tokens, auto-resume |
+| `ccprune` | Auto-detect latest session, prune to 55K tokens, auto-resume |
 | `ccprune --pick` | Interactive session picker |
 | `ccprune -n` | Prune only, don't resume |
 | `ccprune restore <id>` | Restore session from latest backup |
@@ -83,4 +83,4 @@ Key options: `--keep <tokens>`, `--dry-run`, `--no-summary`, `--yolo`, `--resume
 - **Backup Strategy**: `prune-backup/{sessionId}.jsonl.{timestamp}`
 - **Commander.js**: Uses `enablePositionalOptions()` to handle subcommand options (prevents conflicts with main program's `--dry-run`)
 - **Safe Parsing**: All JSON parsing wrapped in try/catch
-- **Default Threshold**: 40K tokens (results in ~55K total after Claude Code adds system context)
+- **Default Threshold**: 55K tokens (results in ~70K total after Claude Code adds system context)

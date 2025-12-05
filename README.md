@@ -6,9 +6,9 @@ Next time your Claude Code context is running low, just quit cc then run `npx cc
 
 ## Features
 
-- **Zero-Config Default**: Just run `ccprune` - auto-detects latest session, keeps 40K tokens (~55K after Claude Code adds system context)
+- **Zero-Config Default**: Just run `ccprune` - auto-detects latest session, keeps 55K tokens (~70K after Claude Code adds system context)
 - **Token-Based Pruning**: Prunes based on actual token count, not message count
-- **Smart Threshold**: Automatically skips pruning if session is under 40K tokens
+- **Smart Threshold**: Automatically skips pruning if session is under 55K tokens
 - **AI Summarization**: Automatically generates a summary of pruned content (enabled by default)
 - **Summary Synthesis**: Re-pruning synthesizes old summary + new pruned content into one cohesive summary
 - **Small Session Warning**: Prompts for confirmation when auto-selecting sessions with < 5 messages
@@ -68,7 +68,7 @@ With `GEMINI_API_KEY` set, ccprune automatically uses Gemini 2.5 Flash for fast 
 ## Usage
 
 ```bash
-# Zero-config: auto-detects latest session, keeps 40K tokens
+# Zero-config: auto-detects latest session, keeps 55K tokens
 ccprune
 
 # Pick from available sessions interactively
@@ -78,7 +78,7 @@ ccprune --pick
 ccprune <sessionId>
 
 # Explicit token limit
-ccprune --keep 40000
+ccprune --keep 55000
 ccprune --keep-tokens 80000
 
 # Subcommands
@@ -104,7 +104,7 @@ ccprune restore <sessionId> [--dry-run]
 | `-n, --no-resume` | Skip automatic session resume |
 | `--yolo` | Resume with `--dangerously-skip-permissions` |
 | `--resume-model <model>` | Model for resumed session (opus, sonnet, haiku, opusplan) |
-| `-k, --keep <number>` | Number of tokens to retain (default: 40000) |
+| `-k, --keep <number>` | Number of tokens to retain (default: 55000) |
 | `--keep-tokens <number>` | Number of tokens to retain (alias for `-k`) |
 | `--dry-run` | Preview changes and summary without modifying files |
 | `--no-summary` | Skip AI summarization of pruned messages |
@@ -116,7 +116,7 @@ ccprune restore <sessionId> [--dry-run]
 | `-h, --help` | Show help information |
 | `-V, --version` | Show version number |
 
-If no session ID is provided, auto-detects the most recently modified session. If no keep option is specified, defaults to 40,000 tokens (~55K actual context after Claude Code adds system prompt and CLAUDE.md).
+If no session ID is provided, auto-detects the most recently modified session. If no keep option is specified, defaults to 55,000 tokens (~70K actual context after Claude Code adds system prompt and CLAUDE.md).
 
 **Summarization priority:**
 1. `--claude-code` flag: Force Claude Code CLI (chunks transcripts >30K chars)
@@ -145,8 +145,8 @@ npx ccprune --yolo --resume-model opus
 # Pick from available sessions interactively
 npx ccprune --pick
 
-# Keep 40K tokens (more aggressive pruning)
-npx ccprune --keep 40000
+# Keep 55K tokens (default)
+npx ccprune --keep 55000
 
 # Keep 80K tokens (less aggressive pruning)
 npx ccprune --keep-tokens 80000
@@ -170,7 +170,7 @@ npx ccprune --gemini-flash
 npx ccprune --claude-code
 
 # Target a specific session by ID
-npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 40000
+npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 55000
 
 # Restore from the latest backup
 npx ccprune restore 03953bb8-6855-4e53-a987-e11422a03fc6
@@ -198,7 +198,7 @@ BEFORE                 AFTER FIRST PRUNE           AFTER RE-PRUNE
 
 1. **Locates Session File**: Finds `$CLAUDE_CONFIG_DIR/projects/{project-path}/{sessionId}.jsonl`
 2. **Counts Tokens**: Uses Claude's cumulative usage data from the last message: `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`. This matches Claude Code's UI display exactly
-3. **Early Exit**: If total tokens ≤ threshold (40K default), skips pruning and auto-resumes
+3. **Early Exit**: If total tokens ≤ threshold (55K default), skips pruning and auto-resumes
 4. **Preserves Critical Data**: Always keeps the first line (file-history-snapshot or session metadata)
 5. **Token-Based Cutoff**: Scans right-to-left, accumulating tokens until adding the next message would exceed the threshold
 6. **Content Extraction**: Extracts text from messages, including `tool_result` outputs and `thinking` blocks. Tool calls become `[Used tool: ToolName]` placeholders to provide context without verbose tool I/O
@@ -288,15 +288,15 @@ ccprune <id>                    # defaults to 20% of messages
 ccprune <id> --keep-percent 25  # keep latest 25% of messages
 
 # ccprune v3.x (token-based, summary enabled by default)
-ccprune <id>                    # defaults to 40K tokens
-ccprune <id> -k 40000           # keep 40K tokens
+ccprune <id>                    # defaults to 55K tokens
+ccprune <id> -k 55000           # keep 55K tokens
 ccprune <id> --keep-tokens 80000 # keep 80K tokens
 ```
 
 **Key changes in v3.x:**
 - **Token-based pruning**: `-k` now means tokens, not message count
 - **Removed**: `-p, --keep-percent` flag (replaced by token-based approach)
-- **Auto-skip**: Sessions under 40K tokens are not pruned
+- **Auto-skip**: Sessions under 55K tokens are not pruned
 - **Lenient boundary**: Includes one extra message at the boundary to preserve context
 - Summary is enabled by default (use `--no-summary` to disable)
 - Re-pruning synthesizes old summary + new pruned content into one summary
@@ -305,7 +305,7 @@ ccprune <id> --keep-tokens 80000 # keep 80K tokens
 - **Accurate token counting**: Uses Claude's cumulative usage data (`input_tokens + cache_read + cache_creation`) to match Claude Code UI
 - **Proportional scaling**: Per-message tokens are scaled to match total context for accurate pruning
 - **`--resume-model`**: Specify which model to use when auto-resuming (opus, sonnet, haiku, opusplan)
-- **40K default**: Lowered from 55K to account for ~15K overhead (system prompt, CLAUDE.md, summary) so resumed sessions show ~55K total
+- **55K default**: Results in ~70K total context after Claude Code adds system prompt, CLAUDE.md, and other overhead
 
 ## Development
 

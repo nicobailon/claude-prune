@@ -169,11 +169,11 @@ program
   });
 
 // Default command - prune session
-const DEFAULT_KEEP_TOKENS = 40000;
+const DEFAULT_KEEP_TOKENS = 55000;
 
 program
   .argument("[sessionId]", "UUID of the session (auto-detects latest if omitted)")
-  .option("-k, --keep <number>", "tokens to retain (default: 40000)", parseInt)
+  .option("-k, --keep <number>", "tokens to retain (default: 55000)", parseInt)
   .option("--keep-tokens <number>", "tokens to retain (alias for -k)", parseInt)
   .option("--pick", "interactively select from available sessions")
   .option("-n, --no-resume", "skip automatic session resume")
