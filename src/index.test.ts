@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { pruneSessionLines, findLatestBackup, getClaudeConfigDir, countAssistantMessages, extractMessageContent, generateUUID, listSessions, findLatestSession, getProjectDir, cleanOrphanedToolResults } from './index.js';
+import { pruneSessionLines, findLatestBackup, getClaudeConfigDir, countAssistantMessages, extractMessageContent, generateUUID, listSessions, findLatestSession, getProjectDir, cleanOrphanedToolResults, pruneToolOutputs, deduplicateToolCalls } from './index.js';
 import { displayCelebration } from './stats.js';
 import { execSync } from 'child_process';
 import { homedir } from 'os';
@@ -1178,5 +1178,223 @@ describe('displayCelebration', () => {
     expect(result).toContain('║');
     expect(result).toContain('╚');
     expect(result).toContain('╝');
+  });
+});
+
+describe('pruneToolOutputs', () => {
+  it('replaces tool_result content with placeholder', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a1" }),
+      JSON.stringify({
+        type: "assistant", uuid: "a1", message: {
+          content: [
+            { type: "tool_use", id: "toolu_01", name: "Read", input: { file_path: "/test.ts" } }
+          ]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u1", message: {
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_01", content: "x".repeat(500) }
+          ]
+        }
+      }),
+    ];
+
+    const { lines: result, prunedCount, savedBytes } = pruneToolOutputs(lines, new Set());
+
+    expect(prunedCount).toBe(1);
+    expect(savedBytes).toBeGreaterThan(400);
+    const userMsg = JSON.parse(result[2]);
+    expect(userMsg.message.content[0].content).toContain('[Pruned: Read output');
+    expect(userMsg.message.content[0].content).toContain('bytes]');
+  });
+
+  it('preserves protected tools', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a1" }),
+      JSON.stringify({
+        type: "assistant", uuid: "a1", message: {
+          content: [
+            { type: "tool_use", id: "toolu_01", name: "Edit", input: {} }
+          ]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u1", message: {
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_01", content: "x".repeat(500) }
+          ]
+        }
+      }),
+    ];
+
+    const protectedTools = new Set(['Edit', 'Write']);
+    const { lines: result, prunedCount } = pruneToolOutputs(lines, protectedTools);
+
+    expect(prunedCount).toBe(0);
+    const userMsg = JSON.parse(result[2]);
+    expect(userMsg.message.content[0].content).toBe("x".repeat(500));
+  });
+
+  it('skips small outputs under threshold', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a1" }),
+      JSON.stringify({
+        type: "assistant", uuid: "a1", message: {
+          content: [
+            { type: "tool_use", id: "toolu_01", name: "Read", input: {} }
+          ]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u1", message: {
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_01", content: "small" }
+          ]
+        }
+      }),
+    ];
+
+    const { prunedCount } = pruneToolOutputs(lines, new Set());
+    expect(prunedCount).toBe(0);
+  });
+
+  it('only prunes targeted IDs when targetIds provided', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a1" }),
+      JSON.stringify({
+        type: "assistant", uuid: "a1", message: {
+          content: [
+            { type: "tool_use", id: "toolu_01", name: "Read", input: {} },
+            { type: "tool_use", id: "toolu_02", name: "Read", input: {} }
+          ]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u1", message: {
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_01", content: "x".repeat(500) },
+            { type: "tool_result", tool_use_id: "toolu_02", content: "y".repeat(500) }
+          ]
+        }
+      }),
+    ];
+
+    const targetIds = new Set(['toolu_01']);
+    const { prunedCount } = pruneToolOutputs(lines, new Set(), targetIds);
+    expect(prunedCount).toBe(1);
+  });
+});
+
+describe('deduplicateToolCalls', () => {
+  it('deduplicates identical tool calls', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a3" }),
+      JSON.stringify({
+        type: "assistant", uuid: "a1", message: {
+          content: [{ type: "tool_use", id: "toolu_01", name: "Read", input: { file: "test.ts" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u1", message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_01", content: "content1" }]
+        }
+      }),
+      JSON.stringify({
+        type: "assistant", uuid: "a2", message: {
+          content: [{ type: "tool_use", id: "toolu_02", name: "Read", input: { file: "test.ts" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u2", message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_02", content: "content2" }]
+        }
+      }),
+      JSON.stringify({
+        type: "assistant", uuid: "a3", message: {
+          content: [{ type: "tool_use", id: "toolu_03", name: "Read", input: { file: "test.ts" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u3", message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_03", content: "content3" }]
+        }
+      }),
+    ];
+
+    const { lines: result, dedupCount } = deduplicateToolCalls(lines, new Set());
+
+    expect(dedupCount).toBe(2);
+
+    const user1 = JSON.parse(result[2]);
+    expect(user1.message.content[0].content).toContain('[Pruned: duplicate Read call 1/3]');
+
+    const user2 = JSON.parse(result[4]);
+    expect(user2.message.content[0].content).toContain('[Pruned: duplicate Read call 2/3]');
+
+    const user3 = JSON.parse(result[6]);
+    expect(user3.message.content[0].content).toContain('[3 total calls]');
+  });
+
+  it('preserves protected tools', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a2" }),
+      JSON.stringify({
+        type: "assistant", uuid: "a1", message: {
+          content: [{ type: "tool_use", id: "toolu_01", name: "Edit", input: { file: "test.ts" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u1", message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_01", content: "edited" }]
+        }
+      }),
+      JSON.stringify({
+        type: "assistant", uuid: "a2", message: {
+          content: [{ type: "tool_use", id: "toolu_02", name: "Edit", input: { file: "test.ts" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u2", message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_02", content: "edited again" }]
+        }
+      }),
+    ];
+
+    const protectedTools = new Set(['Edit']);
+    const { dedupCount } = deduplicateToolCalls(lines, protectedTools);
+
+    expect(dedupCount).toBe(0);
+  });
+
+  it('does not deduplicate different inputs', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a2" }),
+      JSON.stringify({
+        type: "assistant", uuid: "a1", message: {
+          content: [{ type: "tool_use", id: "toolu_01", name: "Read", input: { file: "test1.ts" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u1", message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_01", content: "content1" }]
+        }
+      }),
+      JSON.stringify({
+        type: "assistant", uuid: "a2", message: {
+          content: [{ type: "tool_use", id: "toolu_02", name: "Read", input: { file: "test2.ts" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u2", message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_02", content: "content2" }]
+        }
+      }),
+    ];
+
+    const { dedupCount } = deduplicateToolCalls(lines, new Set());
+
+    expect(dedupCount).toBe(0);
   });
 });

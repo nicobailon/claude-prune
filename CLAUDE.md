@@ -76,6 +76,8 @@ Removes orphaned `tool_result` blocks from the first user message with array con
 
 Key options: `--keep <tokens>`, `--dry-run`, `--no-summary`, `--yolo`, `--resume-model <model>`
 
+Tool pruning (runs by default): `--skip-tool-pruning` (disable), `--prune-tools`, `--prune-tools-ai`, `--prune-tools-dedup`, `--prune-tools-max`, `--prune-tools-keep <tools>`
+
 ## Key Implementation Details
 
 - **Message Detection**: `MSG_TYPES = new Set(["user", "assistant", "system"])`

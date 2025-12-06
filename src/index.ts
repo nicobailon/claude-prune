@@ -170,6 +170,9 @@ program
 
 // Default command - prune session
 const DEFAULT_KEEP_TOKENS = 55000;
+const DEFAULT_PROTECTED_TOOLS = new Set([
+  'Edit', 'Write', 'TodoWrite', 'TodoRead', 'AskUserQuestion'
+]);
 
 program
   .argument("[sessionId]", "UUID of the session (auto-detects latest if omitted)")
@@ -186,6 +189,12 @@ program
   .option("--gemini", "use Gemini 3 Pro for summarization (requires GEMINI_API_KEY)")
   .option("--gemini-flash", "use Gemini 2.5 Flash for summarization (requires GEMINI_API_KEY)")
   .option("--claude-code", "use Claude Code CLI for summarization (chunks large transcripts)")
+  .option("--prune-tools", "replace tool outputs with placeholders to reduce tokens")
+  .option("--prune-tools-ai", "use AI to determine which tool outputs to prune")
+  .option("--prune-tools-dedup", "deduplicate identical tool calls, keep only most recent")
+  .option("--prune-tools-max", "maximum savings: dedup + AI analysis combined")
+  .option("--prune-tools-keep <tools>", "comma-separated tools to never prune (default: Edit,Write,TodoWrite,TodoRead,AskUserQuestion)")
+  .option("--skip-tool-pruning", "disable automatic tool output pruning")
   .action(function(sessionId) {
     return pruneCommand(sessionId, this.opts());
   });
@@ -339,6 +348,292 @@ export function cleanOrphanedToolResults(lines: string[]): string[] {
   }
 
   return result;
+}
+
+// Prune tool outputs by replacing content with placeholders
+export function pruneToolOutputs(
+  lines: string[],
+  protectedTools: Set<string> = DEFAULT_PROTECTED_TOOLS,
+  targetIds?: Set<string>
+): { lines: string[], prunedCount: number, savedBytes: number } {
+  const result = [...lines];
+  let prunedCount = 0;
+  let savedBytes = 0;
+
+  // Build map of tool_use_id -> tool name
+  const toolUseMap = new Map<string, string>();
+  for (const line of result) {
+    try {
+      const obj = JSON.parse(line);
+      if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
+        for (const block of obj.message.content) {
+          if (block.type === 'tool_use' && block.id && block.name) {
+            toolUseMap.set(block.id, block.name);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Replace tool_result content with placeholders
+  for (let i = 0; i < result.length; i++) {
+    try {
+      const obj = JSON.parse(result[i]);
+      if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
+        let modified = false;
+        for (const block of obj.message.content) {
+          if (block.type === 'tool_result' && block.tool_use_id) {
+            const toolName = toolUseMap.get(block.tool_use_id) || 'Unknown';
+            if (protectedTools.has(toolName)) continue;
+            if (targetIds && !targetIds.has(block.tool_use_id)) continue;
+
+            const originalSize = JSON.stringify(block.content).length;
+            if (originalSize > 100) {
+              block.content = `[Pruned: ${toolName} output - ${originalSize} bytes]`;
+              savedBytes += originalSize - block.content.length;
+              prunedCount++;
+              modified = true;
+            }
+          }
+        }
+        if (modified) {
+          result[i] = JSON.stringify(obj);
+        }
+      }
+    } catch {}
+  }
+
+  return { lines: result, prunedCount, savedBytes };
+}
+
+// Deduplicate tool calls - keep only most recent for identical inputs
+export function deduplicateToolCalls(
+  lines: string[],
+  protectedTools: Set<string> = DEFAULT_PROTECTED_TOOLS
+): { lines: string[], dedupCount: number, savedBytes: number } {
+  const result = [...lines];
+  let dedupCount = 0;
+  let savedBytes = 0;
+
+  // Build map: tool_use_id -> { name, inputHash, lineIndex }
+  const toolUseMap = new Map<string, { name: string; inputHash: string; lineIndex: number }>();
+
+  for (let i = 0; i < result.length; i++) {
+    try {
+      const obj = JSON.parse(result[i]);
+      if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
+        for (const block of obj.message.content) {
+          if (block.type === 'tool_use' && block.id && block.name) {
+            const inputHash = JSON.stringify(block.input || {});
+            toolUseMap.set(block.id, { name: block.name, inputHash, lineIndex: i });
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Group by (toolName + inputHash) to find duplicates
+  const callGroups = new Map<string, string[]>();
+  for (const [id, info] of toolUseMap) {
+    if (protectedTools.has(info.name)) continue;
+    const key = `${info.name}:${info.inputHash}`;
+    if (!callGroups.has(key)) callGroups.set(key, []);
+    callGroups.get(key)!.push(id);
+  }
+
+  // Build map of tool_use_id -> tool_result line index
+  const toolResultMap = new Map<string, number>();
+  for (let i = 0; i < result.length; i++) {
+    try {
+      const obj = JSON.parse(result[i]);
+      if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
+        for (const block of obj.message.content) {
+          if (block.type === 'tool_result' && block.tool_use_id) {
+            toolResultMap.set(block.tool_use_id, i);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // For each group with duplicates, prune all but the last
+  for (const [, ids] of callGroups) {
+    if (ids.length <= 1) continue;
+
+    const totalCalls = ids.length;
+    ids.sort((a, b) => toolUseMap.get(a)!.lineIndex - toolUseMap.get(b)!.lineIndex);
+
+    // Prune all but the last
+    for (let callNum = 0; callNum < ids.length - 1; callNum++) {
+      const id = ids[callNum];
+      const toolName = toolUseMap.get(id)!.name;
+      const resultLineIdx = toolResultMap.get(id);
+      if (resultLineIdx === undefined) continue;
+
+      try {
+        const obj = JSON.parse(result[resultLineIdx]);
+        if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
+          for (const block of obj.message.content) {
+            if (block.type === 'tool_result' && block.tool_use_id === id) {
+              const originalSize = JSON.stringify(block.content).length;
+              block.content = `[Pruned: duplicate ${toolName} call ${callNum + 1}/${totalCalls}]`;
+              savedBytes += originalSize - block.content.length;
+              dedupCount++;
+            }
+          }
+          result[resultLineIdx] = JSON.stringify(obj);
+        }
+      } catch {}
+    }
+
+    // Annotate the last (kept) with total count
+    const lastId = ids[ids.length - 1];
+    const lastResultLineIdx = toolResultMap.get(lastId);
+    if (lastResultLineIdx !== undefined) {
+      try {
+        const obj = JSON.parse(result[lastResultLineIdx]);
+        if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
+          for (const block of obj.message.content) {
+            if (block.type === 'tool_result' && block.tool_use_id === lastId) {
+              if (typeof block.content === 'string') {
+                block.content = `${block.content}\n\n[${totalCalls} total calls]`;
+              }
+            }
+          }
+          result[lastResultLineIdx] = JSON.stringify(obj);
+        }
+      } catch {}
+    }
+  }
+
+  return { lines: result, dedupCount, savedBytes };
+}
+
+// AI-based pruning: use LLM to identify irrelevant tool outputs
+export async function getAIPruneTargets(
+  lines: string[],
+  protectedTools: Set<string>,
+  opts: { gemini?: boolean; geminiFlash?: boolean; summaryModel?: string; summaryTimeout?: number }
+): Promise<Set<string>> {
+  // Build list of tool calls with their outputs (truncated for prompt)
+  const toolCalls: { id: string; name: string; inputPreview: string; outputPreview: string }[] = [];
+
+  // Build map of tool_use_id -> { name, input }
+  const toolUseMap = new Map<string, { name: string; input: string }>();
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line);
+      if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
+        for (const block of obj.message.content) {
+          if (block.type === 'tool_use' && block.id && block.name) {
+            if (protectedTools.has(block.name)) continue;
+            toolUseMap.set(block.id, {
+              name: block.name,
+              input: JSON.stringify(block.input || {}).slice(0, 100)
+            });
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Match tool_results
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line);
+      if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
+        for (const block of obj.message.content) {
+          if (block.type === 'tool_result' && block.tool_use_id) {
+            const toolInfo = toolUseMap.get(block.tool_use_id);
+            if (toolInfo) {
+              const outputStr = typeof block.content === 'string'
+                ? block.content
+                : JSON.stringify(block.content);
+              toolCalls.push({
+                id: block.tool_use_id,
+                name: toolInfo.name,
+                inputPreview: toolInfo.input,
+                outputPreview: outputStr.slice(0, 200)
+              });
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  if (toolCalls.length === 0) {
+    return new Set();
+  }
+
+  const prompt = `Analyze this Claude Code session's tool calls and identify which outputs are NO LONGER RELEVANT to the current task.
+
+Tool calls in this session:
+${toolCalls.map((t, i) => `${i + 1}. [${t.id}] ${t.name}: ${t.inputPreview} → ${t.outputPreview}...`).join('\n')}
+
+Return ONLY a JSON array of tool_use_ids that should be pruned (outputs no longer needed).
+Example: ["toolu_01abc", "toolu_02def"]
+
+Consider keeping:
+- Recent file reads (may be referenced)
+- Error outputs (context for debugging)
+- Configuration/setup results
+
+Prune:
+- Outdated file reads (file was read again later)
+- Exploratory searches not related to current work
+- Large outputs that were just glanced at
+
+Return ONLY the JSON array, nothing else:`;
+
+  try {
+    let response: string;
+
+    if (opts.gemini) {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        console.log(chalk.yellow('No GEMINI_API_KEY, skipping AI pruning'));
+        return new Set();
+      }
+
+      const model = opts.geminiFlash ? 'gemini-2.5-flash' : 'gemini-3-pro-preview';
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
+        })
+      });
+
+      if (!res.ok) {
+        console.log(chalk.yellow(`Gemini API error: ${res.status}`));
+        return new Set();
+      }
+
+      const data = await res.json() as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      response = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    } else {
+      const args = ['-p'];
+      if (opts.summaryModel) args.push('--model', opts.summaryModel);
+      response = await spawnClaudeAsync(args, prompt, opts.summaryTimeout || 60000);
+    }
+
+    // Parse JSON array from response
+    const match = response.match(/\[[\s\S]*?\]/);
+    if (match) {
+      const ids = JSON.parse(match[0]);
+      return new Set(ids.filter((id: unknown) => typeof id === 'string'));
+    }
+  } catch (err) {
+    console.log(chalk.yellow(`AI pruning analysis failed: ${err}`));
+  }
+
+  return new Set();
 }
 
 // Extract core logic for testing
@@ -828,7 +1123,7 @@ ${transcriptToSummarize}`;
 // ---------- Prune Command Wrapper ----------
 async function pruneCommand(
   sessionId: string | undefined,
-  opts: { keep?: number; keepTokens?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; claudeCode?: boolean; yolo?: boolean }
+  opts: { keep?: number; keepTokens?: number; pick?: boolean; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; claudeCode?: boolean; yolo?: boolean; pruneTools?: boolean; pruneToolsAi?: boolean; pruneToolsDedup?: boolean; pruneToolsMax?: boolean; pruneToolsKeep?: string; skipToolPruning?: boolean; resumeModel?: string }
 ) {
   // Merge --keep-tokens into --keep (alias)
   if (opts.keepTokens !== undefined) {
@@ -925,7 +1220,7 @@ async function pruneCommand(
 }
 
 // ---------- Main ----------
-async function main(sessionId: string, opts: { keep?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; yolo?: boolean }) {
+async function main(sessionId: string, opts: { keep?: number; resume?: boolean; dryRun?: boolean; summary?: boolean; summaryModel?: string; summaryTimeout?: number; gemini?: boolean; geminiFlash?: boolean; yolo?: boolean; pruneTools?: boolean; pruneToolsAi?: boolean; pruneToolsDedup?: boolean; pruneToolsMax?: boolean; pruneToolsKeep?: string; skipToolPruning?: boolean; resumeModel?: string }) {
   const cwdProject = process.cwd().replace(/[\/\.]/g, '-');
   const file = join(getClaudeConfigDir(), "projects", cwdProject, `${sessionId}.jsonl`);
 
@@ -941,7 +1236,61 @@ async function main(sessionId: string, opts: { keep?: number; resume?: boolean; 
 
   const spinner = ora(`Reading ${file}`).start();
   const raw = await fs.readFile(file, "utf8");
-  const lines = raw.split(/\r?\n/).filter(Boolean);
+  let lines = raw.split(/\r?\n/).filter(Boolean);
+
+  // Apply tool pruning (runs by default, before token counting)
+  const protectedTools = opts.pruneToolsKeep
+    ? new Set(opts.pruneToolsKeep.split(',').map(s => s.trim()))
+    : DEFAULT_PROTECTED_TOOLS;
+
+  let toolPruningMadeChanges = false;
+  const noExplicitToolFlag = !opts.pruneTools && !opts.pruneToolsAi &&
+                             !opts.pruneToolsDedup && !opts.pruneToolsMax;
+  const skipToolPruning = opts.skipToolPruning === true;
+
+  if (skipToolPruning) {
+    // --skip-tool-pruning: do nothing
+  } else if (noExplicitToolFlag || opts.pruneToolsMax) {
+    // DEFAULT (no flags) or --prune-tools-max: run dedup + AI
+    spinner.text = 'Deduplicating tool calls...';
+    const { lines: dedupedLines, dedupCount, savedBytes: dedupSaved } = deduplicateToolCalls(lines, protectedTools);
+    lines = dedupedLines;
+
+    spinner.text = 'Analyzing tool outputs with AI...';
+    const aiPruneTargets = await getAIPruneTargets(lines, protectedTools, opts);
+    const { lines: aiPrunedLines, prunedCount, savedBytes: aiSaved } = pruneToolOutputs(lines, protectedTools, aiPruneTargets);
+    lines = aiPrunedLines;
+
+    if (dedupCount > 0 || prunedCount > 0) {
+      toolPruningMadeChanges = true;
+      console.log(chalk.dim(`\nTool pruning: ${dedupCount} deduped + ${prunedCount} AI-pruned (saved ~${Math.round((dedupSaved + aiSaved) / 1024)}KB)`));
+    }
+  } else if (opts.pruneToolsDedup) {
+    spinner.text = 'Deduplicating tool calls...';
+    const { lines: dedupedLines, dedupCount, savedBytes } = deduplicateToolCalls(lines, protectedTools);
+    lines = dedupedLines;
+    if (dedupCount > 0) {
+      toolPruningMadeChanges = true;
+      console.log(chalk.dim(`\nDeduplicated ${dedupCount} duplicate tool calls (saved ~${Math.round(savedBytes / 1024)}KB)`));
+    }
+  } else if (opts.pruneToolsAi) {
+    spinner.text = 'Analyzing tool outputs with AI...';
+    const aiPruneTargets = await getAIPruneTargets(lines, protectedTools, opts);
+    const { lines: prunedLines, prunedCount, savedBytes } = pruneToolOutputs(lines, protectedTools, aiPruneTargets);
+    lines = prunedLines;
+    if (prunedCount > 0) {
+      toolPruningMadeChanges = true;
+      console.log(chalk.dim(`\nAI identified ${aiPruneTargets.size} outputs to prune (saved ~${Math.round(savedBytes / 1024)}KB)`));
+    }
+  } else if (opts.pruneTools) {
+    spinner.text = 'Pruning tool outputs...';
+    const { lines: prunedLines, prunedCount, savedBytes } = pruneToolOutputs(lines, protectedTools);
+    lines = prunedLines;
+    if (prunedCount > 0) {
+      toolPruningMadeChanges = true;
+      console.log(chalk.dim(`\nPruned ${prunedCount} tool outputs (saved ~${Math.round(savedBytes / 1024)}KB)`));
+    }
+  }
 
   const keepTokens = opts.keep ?? DEFAULT_KEEP_TOKENS;
   const { total: totalTokens, breakdown } = countSessionTokens(lines);
@@ -963,9 +1312,18 @@ async function main(sessionId: string, opts: { keep?: number; resume?: boolean; 
 
     // Still clean orphaned tool_results even without compaction
     const cleanedLines = cleanOrphanedToolResults(lines);
-    if (cleanedLines.length !== lines.length || cleanedLines.some((l, i) => l !== lines[i])) {
+    const orphanCleanupMadeChanges = cleanedLines.length !== lines.length ||
+      cleanedLines.some((l, i) => l !== lines[i]);
+
+    // Write file if tool pruning OR orphan cleanup made changes
+    if (toolPruningMadeChanges || orphanCleanupMadeChanges) {
       fs.writeFileSync(file, cleanedLines.join('\n') + '\n');
-      console.log(chalk.yellow('Cleaned orphaned tool_results'));
+      if (toolPruningMadeChanges) {
+        console.log(chalk.yellow('Saved tool pruning changes'));
+      }
+      if (orphanCleanupMadeChanges) {
+        console.log(chalk.yellow('Cleaned orphaned tool_results'));
+      }
     }
 
     console.log();

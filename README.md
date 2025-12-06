@@ -113,6 +113,11 @@ ccprune restore <sessionId> [--dry-run]
 | `--gemini` | Use Gemini 3 Pro for summarization |
 | `--gemini-flash` | Use Gemini 2.5 Flash for summarization |
 | `--claude-code` | Use Claude Code CLI for summarization (chunks large transcripts) |
+| `--prune-tools` | Replace all non-protected tool outputs with placeholders |
+| `--prune-tools-ai` | Use AI to identify which tool outputs to prune |
+| `--prune-tools-dedup` | Deduplicate identical tool calls, keep only most recent |
+| `--prune-tools-max` | Maximum savings: dedup + AI analysis combined |
+| `--prune-tools-keep <tools>` | Comma-separated tools to never prune (default: Edit,Write,TodoWrite,TodoRead,AskUserQuestion) |
 | `-h, --help` | Show help information |
 | `-V, --version` | Show version number |
 
@@ -175,6 +180,42 @@ npx ccprune 03953bb8-6855-4e53-a987-e11422a03fc6 --keep 55000
 # Restore from the latest backup
 npx ccprune restore 03953bb8-6855-4e53-a987-e11422a03fc6
 ```
+
+## Tool Output Pruning (Default)
+
+Tool pruning runs **automatically** to reduce tokens before summarization:
+
+1. **Dedup**: Identical tool calls are deduplicated (keeps only most recent)
+2. **AI analysis**: Intelligently prunes irrelevant outputs using your summarization backend
+
+```bash
+# Default behavior (dedup + AI) - runs automatically
+ccprune
+
+# Disable automatic tool pruning
+ccprune --skip-tool-pruning
+
+# Explicit modes for specific behavior:
+ccprune --prune-tools          # Simple: replace ALL outputs (no AI)
+ccprune --prune-tools-dedup    # Dedup only (no AI)
+ccprune --prune-tools-ai       # AI only (no dedup)
+ccprune --prune-tools-max      # Explicit dedup + AI (same as default)
+
+# Custom protected tools
+ccprune --prune-tools-keep "Edit,Write,Bash"
+```
+
+**Protected tools** (never pruned by default):
+- `Edit`, `Write` - file modification context
+- `TodoWrite`, `TodoRead` - task tracking
+- `AskUserQuestion` - user interaction
+
+**Modes explained:**
+- **Default** (no flags): Runs dedup first (free), then AI analysis - maximum savings
+- **Simple** (`--prune-tools`): Replaces all non-protected tool outputs with `[Pruned: {tool} output - {bytes} bytes]`
+- **AI** (`--prune-tools-ai`): Uses your summarization backend (Gemini or Claude Code CLI) to intelligently identify which outputs are no longer relevant
+- **Dedup** (`--prune-tools-dedup`): Keeps only the most recent output when the same tool is called with identical input. Annotates with `[{total} total calls]`
+- **Skip** (`--skip-tool-pruning`): Disable automatic tool pruning entirely
 
 ## How It Works
 
