@@ -359,6 +359,7 @@ export function pruneToolOutputs(
   const result = [...lines];
   let prunedCount = 0;
   let savedBytes = 0;
+  const protectedLower = new Set([...protectedTools].map(t => t.toLowerCase()));
 
   // Build map of tool_use_id -> tool name
   const toolUseMap = new Map<string, string>();
@@ -384,7 +385,7 @@ export function pruneToolOutputs(
         for (const block of obj.message.content) {
           if (block.type === 'tool_result' && block.tool_use_id) {
             const toolName = toolUseMap.get(block.tool_use_id) || 'Unknown';
-            if (protectedTools.has(toolName)) continue;
+            if (protectedLower.has(toolName.toLowerCase())) continue;
             if (targetIds && !targetIds.has(block.tool_use_id)) continue;
 
             const originalSize = JSON.stringify(block.content).length;
@@ -414,6 +415,7 @@ export function deduplicateToolCalls(
   const result = [...lines];
   let dedupCount = 0;
   let savedBytes = 0;
+  const protectedLower = new Set([...protectedTools].map(t => t.toLowerCase()));
 
   // Build map: tool_use_id -> { name, inputHash, lineIndex }
   const toolUseMap = new Map<string, { name: string; inputHash: string; lineIndex: number }>();
@@ -432,11 +434,11 @@ export function deduplicateToolCalls(
     } catch {}
   }
 
-  // Group by (toolName + inputHash) to find duplicates
+  // Group by (toolName + inputHash) to find duplicates (case-insensitive tool name)
   const callGroups = new Map<string, string[]>();
   for (const [id, info] of toolUseMap) {
-    if (protectedTools.has(info.name)) continue;
-    const key = `${info.name}:${info.inputHash}`;
+    if (protectedLower.has(info.name.toLowerCase())) continue;
+    const key = `${info.name.toLowerCase()}:${info.inputHash}`;
     if (!callGroups.has(key)) callGroups.set(key, []);
     callGroups.get(key)!.push(id);
   }
@@ -515,8 +517,8 @@ export async function getAIPruneTargets(
   protectedTools: Set<string>,
   opts: { gemini?: boolean; geminiFlash?: boolean; summaryModel?: string; summaryTimeout?: number }
 ): Promise<Set<string>> {
-  // Build list of tool calls with their outputs (truncated for prompt)
-  const toolCalls: { id: string; name: string; inputPreview: string; outputPreview: string }[] = [];
+  const protectedLower = new Set([...protectedTools].map(t => t.toLowerCase()));
+  const toolCalls: { id: string; name: string; inputPreview: string; outputPreview: string; isError: boolean }[] = [];
 
   // Build map of tool_use_id -> { name, input }
   const toolUseMap = new Map<string, { name: string; input: string }>();
@@ -526,7 +528,7 @@ export async function getAIPruneTargets(
       if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
         for (const block of obj.message.content) {
           if (block.type === 'tool_use' && block.id && block.name) {
-            if (protectedTools.has(block.name)) continue;
+            if (protectedLower.has(block.name.toLowerCase())) continue;
             toolUseMap.set(block.id, {
               name: block.name,
               input: JSON.stringify(block.input || {}).slice(0, 100)
@@ -537,7 +539,7 @@ export async function getAIPruneTargets(
     } catch {}
   }
 
-  // Match tool_results
+  // Match tool_results and capture error status
   for (const line of lines) {
     try {
       const obj = JSON.parse(line);
@@ -553,7 +555,8 @@ export async function getAIPruneTargets(
                 id: block.tool_use_id,
                 name: toolInfo.name,
                 inputPreview: toolInfo.input,
-                outputPreview: outputStr.slice(0, 200)
+                outputPreview: outputStr.slice(0, 200),
+                isError: block.is_error === true
               });
             }
           }
@@ -569,20 +572,20 @@ export async function getAIPruneTargets(
   const prompt = `Analyze this Claude Code session's tool calls and identify which outputs are NO LONGER RELEVANT to the current task.
 
 Tool calls in this session:
-${toolCalls.map((t, i) => `${i + 1}. [${t.id}] ${t.name}: ${t.inputPreview} → ${t.outputPreview}...`).join('\n')}
+${toolCalls.map((t, i) => `${i + 1}. [${t.id}] ${t.name}${t.isError ? ' [ERROR]' : ''}: ${t.inputPreview} → ${t.outputPreview}...`).join('\n')}
 
 Return ONLY a JSON array of tool_use_ids that should be pruned (outputs no longer needed).
 Example: ["toolu_01abc", "toolu_02def"]
 
-Consider keeping:
-- Recent file reads (may be referenced)
-- Error outputs (context for debugging)
+KEEP (do not prune):
+- Tool calls marked [ERROR] - these contain debugging context
+- Recent file reads that may still be referenced
 - Configuration/setup results
 
-Prune:
-- Outdated file reads (file was read again later)
+PRUNE (safe to remove):
+- Outdated file reads (file was read again later with newer content)
 - Exploratory searches not related to current work
-- Large outputs that were just glanced at
+- Large outputs that were glanced at but not used
 
 Return ONLY the JSON array, nothing else:`;
 

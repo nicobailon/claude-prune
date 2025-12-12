@@ -1285,6 +1285,31 @@ describe('pruneToolOutputs', () => {
     const { prunedCount } = pruneToolOutputs(lines, new Set(), targetIds);
     expect(prunedCount).toBe(1);
   });
+
+  it('respects protected tools case-insensitively', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a1" }),
+      JSON.stringify({
+        type: "assistant", uuid: "a1", message: {
+          content: [
+            { type: "tool_use", id: "toolu_01", name: "edit", input: {} }
+          ]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u1", message: {
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_01", content: "x".repeat(500) }
+          ]
+        }
+      }),
+    ];
+
+    const protectedTools = new Set(['Edit']);
+    const { prunedCount } = pruneToolOutputs(lines, protectedTools);
+
+    expect(prunedCount).toBe(0);
+  });
 });
 
 describe('deduplicateToolCalls', () => {
@@ -1396,5 +1421,66 @@ describe('deduplicateToolCalls', () => {
     const { dedupCount } = deduplicateToolCalls(lines, new Set());
 
     expect(dedupCount).toBe(0);
+  });
+
+  it('respects protected tools case-insensitively', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a2" }),
+      JSON.stringify({
+        type: "assistant", uuid: "a1", message: {
+          content: [{ type: "tool_use", id: "toolu_01", name: "edit", input: { file: "test.ts" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u1", message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_01", content: "edited" }]
+        }
+      }),
+      JSON.stringify({
+        type: "assistant", uuid: "a2", message: {
+          content: [{ type: "tool_use", id: "toolu_02", name: "EDIT", input: { file: "test.ts" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u2", message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_02", content: "edited again" }]
+        }
+      }),
+    ];
+
+    const protectedTools = new Set(['Edit']);
+    const { dedupCount } = deduplicateToolCalls(lines, protectedTools);
+
+    expect(dedupCount).toBe(0);
+  });
+
+  it('deduplicates tool calls case-insensitively', () => {
+    const lines = [
+      JSON.stringify({ type: "summary", leafUuid: "a2" }),
+      JSON.stringify({
+        type: "assistant", uuid: "a1", message: {
+          content: [{ type: "tool_use", id: "toolu_01", name: "Read", input: { file: "test.ts" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u1", message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_01", content: "content1" }]
+        }
+      }),
+      JSON.stringify({
+        type: "assistant", uuid: "a2", message: {
+          content: [{ type: "tool_use", id: "toolu_02", name: "read", input: { file: "test.ts" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user", uuid: "u2", message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_02", content: "content2" }]
+        }
+      }),
+    ];
+
+    const { dedupCount } = deduplicateToolCalls(lines, new Set());
+
+    expect(dedupCount).toBe(1);
   });
 });
